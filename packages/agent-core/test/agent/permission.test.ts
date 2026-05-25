@@ -603,13 +603,13 @@ describe('Permission policy chain', () => {
       'user-configured-deny',
       'auto-mode-approve',
       'user-configured-allow',
+      'exit-plan-mode-review-ask',
       'session-approval-history',
       'user-configured-ask',
       'plan-mode-tool-approve',
       'sensitive-file-access-ask',
       'git-control-path-access-ask',
       'cwd-outside-file-access-ask',
-      'exit-plan-mode-review-ask',
       'yolo-mode-approve',
       'default-tool-approve',
       'git-cwd-write-approve',
@@ -894,6 +894,51 @@ describe('ExitPlanMode permission policy', () => {
         selectedOption: planOptions[1],
       },
     });
+  });
+
+  it('keeps plan review ahead of matching session approval history', async () => {
+    const { manager, requestApproval } = makePlanPermissionManager({
+      mode: 'manual',
+      plan: '# Updated Plan',
+      approval: { decision: 'approved' },
+    });
+    manager.recordApprovalResult({
+      turnId: 0,
+      toolCallId: 'previous_exit',
+      toolName: 'ExitPlanMode',
+      action: 'Presenting plan and exiting plan mode',
+      sessionApprovalKey: stableToolArgsKey('ExitPlanMode', {}),
+      result: { decision: 'approved', scope: 'session' },
+    });
+
+    const result = await manager.beforeToolCall(
+      hookContext({
+        id: 'call_exit',
+        toolName: 'ExitPlanMode',
+        args: {},
+        execution: planReviewExecution({ plan: '# Updated Plan', path: '/tmp/plan.md' }),
+      }),
+    );
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      executionMetadata: {
+        planApproval: {
+          decision: 'approved',
+        },
+      },
+    });
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'ExitPlanMode',
+        action: 'Presenting plan and exiting plan mode',
+        display: expect.objectContaining({
+          kind: 'plan_review',
+          plan: '# Updated Plan',
+        }),
+      }),
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it('returns a synthetic stop-turn result when the user rejects the plan', async () => {

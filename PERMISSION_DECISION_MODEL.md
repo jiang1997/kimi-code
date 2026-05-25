@@ -75,6 +75,11 @@
 - 用户配置 `allow` rule 命中 -> `approve`
 - 使用与 User Configured Deny Rules 相同的 rule 匹配方式
 
+## exit-plan-mode-review-ask: ExitPlanMode Review Ask
+
+- `ExitPlanMode` 且 plan mode active 且 plan 内容非空且 `permissionMode!=auto` -> `ask`
+- 本 policy 必须在 Session Approval Memorized History 之前执行；plan review 的审批对象包含当前 plan 内容，而 session history 只记 tool name + tool args，不能表达“这份新 plan 已经被 review”
+
 ## session-approval-history: Session Approval Memorized History
 
 - `Approve for session` 记住的是本次 tool call 的 exact key：tool name + 完整 tool args
@@ -105,10 +110,6 @@
 ## cwd-outside-file-access-ask: CWD Outside File Access Ask
 
 - `execution.accesses` 中存在 `read` / `write` / `readwrite` / `search` file access，且目标 path 在 cwd 外 -> `ask`
-
-## exit-plan-mode-review-ask: ExitPlanMode Review Ask
-
-- `ExitPlanMode` 且 plan mode active 且 plan 内容非空且 `permissionMode!=auto` -> `ask`
 
 ## yolo-mode-approve: YOLO Mode Approve
 
