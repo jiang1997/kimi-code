@@ -155,7 +155,10 @@ describe('ExitPlanMode telemetry', () => {
 
     expect(result.isError).toBe(false);
     expect(exitPlanMode).not.toHaveBeenCalled();
-    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
+      outcome: 'revise',
+      has_feedback: true,
+    });
     expect(telemetryTrack).toHaveBeenCalledWith(
       'permission_approval_result',
       expect.objectContaining({
@@ -175,7 +178,9 @@ describe('ExitPlanMode telemetry', () => {
 
     expect(result.isError).toBe(true);
     expect(exitPlanMode).not.toHaveBeenCalled();
-    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
+      outcome: 'rejected',
+    });
     expect(telemetryTrack).toHaveBeenCalledWith(
       'permission_approval_result',
       expect.objectContaining({
@@ -195,7 +200,9 @@ describe('ExitPlanMode telemetry', () => {
     expect(result.isError).toBe(false);
     expect(result.output).toContain('dismissed');
     expect(exitPlanMode).not.toHaveBeenCalled();
-    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
+      outcome: 'dismissed',
+    });
     expect(telemetryTrack).toHaveBeenCalledWith(
       'permission_approval_result',
       expect.objectContaining({
@@ -215,7 +222,9 @@ describe('ExitPlanMode telemetry', () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain('Plan mode deactivated');
     expect(exitPlanMode).toHaveBeenCalledTimes(1);
-    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
+      outcome: 'rejected_and_exited',
+    });
     expect(telemetryTrack).toHaveBeenCalledWith(
       'permission_approval_result',
       expect.objectContaining({

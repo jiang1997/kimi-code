@@ -59,6 +59,8 @@ function exitPlanModeApprovalResult(
 }
 
 function rejectedExitPlanModeApprovalResult(agent: Agent, result: ApprovalResponse) {
+  trackRejectedPlanResolution(agent, result);
+
   if (result.decision === 'cancelled') {
     return {
       kind: 'result' as const,
@@ -132,4 +134,27 @@ function selectedExitPlanModeOption(
 ): ExitPlanModeOption | undefined {
   if (options === undefined || label === undefined) return undefined;
   return options.find((option) => option.label === label);
+}
+
+function trackRejectedPlanResolution(agent: Agent, result: ApprovalResponse): void {
+  if (result.decision === 'cancelled') {
+    agent.telemetry.track('plan_resolved', { outcome: 'dismissed' });
+    return;
+  }
+
+  if (result.selectedLabel === 'Reject and Exit') {
+    agent.telemetry.track('plan_resolved', { outcome: 'rejected_and_exited' });
+    return;
+  }
+
+  const feedback = result.feedback ?? '';
+  if (result.selectedLabel === 'Revise' || feedback.length > 0) {
+    agent.telemetry.track('plan_resolved', {
+      outcome: 'revise',
+      has_feedback: feedback.length > 0,
+    });
+    return;
+  }
+
+  agent.telemetry.track('plan_resolved', { outcome: 'rejected' });
 }
