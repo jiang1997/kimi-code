@@ -79,9 +79,9 @@ describe('Plan mode permission policy', () => {
     const planPath = planMode.planFilePath;
     if (planPath === null) throw new Error('expected plan path');
 
-    expect(await evaluatePlanPolicy(agent, 'Write', { path: planPath })).toBeUndefined();
+    expect(evaluatePlanPolicy(agent, 'Write', { path: planPath })).toBeUndefined();
     expect(
-      await evaluatePlanPolicy(
+      evaluatePlanPolicy(
         agent,
         'Edit',
         {
@@ -96,11 +96,11 @@ describe('Plan mode permission policy', () => {
   it('blocks Write and Edit to non-plan files before permission approval', async () => {
     const { agent } = await activePlanAgent();
 
-    const write = await evaluatePlanPolicy(agent, 'Write', {
+    const write = evaluatePlanPolicy(agent, 'Write', {
       path: '/workspace/src/main.ts',
       content: 'x',
     });
-    const edit = await evaluatePlanPolicy(agent, 'Edit', {
+    const edit = evaluatePlanPolicy(agent, 'Edit', {
       path: '/workspace/src/main.ts',
       old_string: 'A',
       new_string: 'B',
@@ -117,7 +117,7 @@ describe('Plan mode permission policy', () => {
     const { agent, planMode } = await activePlanAgent();
     (planMode as unknown as { _planFilePath: string | null })._planFilePath = null;
 
-    const result = await evaluatePlanPolicy(agent, 'Edit', {
+    const result = evaluatePlanPolicy(agent, 'Edit', {
       path: '/workspace/src/other.ts',
       old_string: 'A',
       new_string: 'B',
@@ -133,12 +133,8 @@ describe('Plan mode permission policy', () => {
     async (mode) => {
       const { agent } = await activePlanAgent();
 
-      expect(
-        await evaluatePlanPolicy(agent, 'Bash', { command: 'rm foo.txt' }, mode),
-      ).toBeUndefined();
-      expect(
-        await evaluatePlanPolicy(agent, 'Bash', { command: 'ls -la' }, mode),
-      ).toBeUndefined();
+      expect(evaluatePlanPolicy(agent, 'Bash', { command: 'rm foo.txt' }, mode)).toBeUndefined();
+      expect(evaluatePlanPolicy(agent, 'Bash', { command: 'ls -la' }, mode)).toBeUndefined();
     },
   );
 
@@ -147,7 +143,7 @@ describe('Plan mode permission policy', () => {
     async (mode) => {
       const { agent } = await activePlanAgent();
 
-      const result = await evaluatePlanPolicy(
+      const result = evaluatePlanPolicy(
         agent,
         'TaskStop',
         { task_id: 'bash-abc12345' },
@@ -164,15 +160,9 @@ describe('Plan mode permission policy', () => {
     const { agent, planMode } = await activePlanAgent();
     planMode.exit();
 
-    expect(
-      await evaluatePlanPolicy(agent, 'Write', { path: '/workspace/src/main.ts' }),
-    ).toBeUndefined();
-    expect(
-      await evaluatePlanPolicy(agent, 'Bash', { command: 'rm foo.txt' }),
-    ).toBeUndefined();
-    expect(
-      await evaluatePlanPolicy(agent, 'TaskStop', { task_id: 'bash-abc12345' }),
-    ).toBeUndefined();
+    expect(evaluatePlanPolicy(agent, 'Write', { path: '/workspace/src/main.ts' })).toBeUndefined();
+    expect(evaluatePlanPolicy(agent, 'Bash', { command: 'rm foo.txt' })).toBeUndefined();
+    expect(evaluatePlanPolicy(agent, 'TaskStop', { task_id: 'bash-abc12345' })).toBeUndefined();
   });
 });
 

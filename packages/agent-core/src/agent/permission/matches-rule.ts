@@ -85,7 +85,7 @@ export function matchesRule(
 function singleActualFieldValue(args: unknown): unknown {
   if (args === null || typeof args !== 'object' || Array.isArray(args)) return undefined;
   const entries = Object.entries(args as Record<string, unknown>).filter(
-    ([, value]) => typeof value !== 'undefined',
+    ([, value]) => value !== undefined,
   );
   return entries.length === 1 ? entries[0]![1] : undefined;
 }

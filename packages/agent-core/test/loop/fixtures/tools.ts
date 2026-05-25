@@ -33,8 +33,8 @@ export interface RecordedToolCall<Input> {
 
 export function markReadAnyFileAccesses<T extends ExecutableTool>(tool: T): T {
   const resolveExecution = tool.resolveExecution.bind(tool);
-  tool.resolveExecution = ((input: unknown) => {
-    const execution = resolveExecution(input);
+  tool.resolveExecution = (async (input: unknown) => {
+    const execution = await resolveExecution(input);
     return { ...execution, accesses: ToolAccesses.readAnyFile() };
   }) as T['resolveExecution'];
   return tool;

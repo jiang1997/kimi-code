@@ -9,17 +9,19 @@ export function stableSerialize(value: unknown): string {
   if (value === null) return 'null';
   if (typeof value === 'string') return JSON.stringify(value);
   if (typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(value);
-  if (typeof value === 'undefined') return 'undefined';
+  if (value === undefined) return 'undefined';
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
   }
   if (typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
+    const entries = Object.entries(value as Record<string, unknown>).toSorted(([left], [right]) =>
       left.localeCompare(right),
     );
     return `{${entries
       .map(([key, item]) => `${JSON.stringify(key)}:${stableSerialize(item)}`)
       .join(',')}}`;
   }
-  return JSON.stringify(String(value));
+  if (typeof value === 'bigint') return JSON.stringify(value.toString());
+  if (typeof value === 'symbol') return JSON.stringify(value.description ?? '');
+  return JSON.stringify('[function]');
 }

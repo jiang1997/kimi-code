@@ -4,7 +4,7 @@
  * The LLM calls this tool to surface a finalised plan to the user and
  * exit plan mode. The plan must already be written to the current plan
  * file; this tool reads that file and flips plan mode off. PermissionManager
- * handles plan approval before this tool runs and passes any selected option
+ * handles plan approval before this tool runs and passes the approval outcome
  * through execution metadata.
  */
 
@@ -79,6 +79,12 @@ type ResolvePlanResult =
   | { readonly ok: true; readonly plan: string; readonly path?: string | undefined }
   | { readonly ok: false; readonly error: ExecutableToolResult };
 
+interface PlanApprovalMetadata {
+  readonly decision: 'approved' | 'rejected' | 'cancelled';
+  readonly selectedLabel?: string;
+  readonly feedback?: string;
+}
+
 // ── Implementation ───────────────────────────────────────────────────
 
 export class ExitPlanModeTool implements BuiltinTool<ExitPlanModeInput> {
@@ -140,6 +146,19 @@ export class ExitPlanModeTool implements BuiltinTool<ExitPlanModeInput> {
         has_options: args.options !== undefined && args.options.length >= 2,
       });
     }
+    const planApproval = planApprovalFromMetadata(metadata);
+    if (planApproval !== undefined) {
+      trackPlanApprovalResolution(this.agent, planApproval);
+      if (planApproval.decision !== 'approved') {
+        return this.planApprovalRejectedResult(planApproval);
+      }
+      return this.exitWithPlan(
+        resolvedPlan.plan,
+        resolvedPlan.path,
+        selectedOptionFromMetadata(metadata),
+        true,
+      );
+    }
     return this.exitWithPlan(
       resolvedPlan.plan,
       resolvedPlan.path,
@@ -167,6 +186,43 @@ export class ExitPlanModeTool implements BuiltinTool<ExitPlanModeInput> {
     return {
       isError: false,
       output: `Exited plan mode. ${optionPrefix}${formatPlanForOutput(plan, path)}`,
+    };
+  }
+
+  private planApprovalRejectedResult(approval: PlanApprovalMetadata): ExecutableToolResult {
+    if (approval.decision === 'cancelled') {
+      return {
+        isError: false,
+        output: 'Plan approval dismissed. Plan mode remains active.',
+      };
+    }
+
+    if (normalizeOptionLabel(approval.selectedLabel ?? '') === 'reject and exit') {
+      const failed = this.exitPlanMode();
+      return (
+        failed ?? {
+          isError: true,
+          stopTurn: true,
+          output: 'Plan rejected by user. Plan mode deactivated.',
+        }
+      );
+    }
+
+    const feedback = approval.feedback ?? '';
+    if (normalizeOptionLabel(approval.selectedLabel ?? '') === 'revise' || feedback.length > 0) {
+      return {
+        isError: false,
+        output:
+          feedback.length > 0
+            ? `User rejected the plan. Feedback:\n\n${feedback}`
+            : 'User requested revisions. Plan mode remains active.',
+      };
+    }
+
+    return {
+      isError: true,
+      stopTurn: true,
+      output: 'Plan rejected by user. Plan mode remains active.',
     };
   }
 
@@ -243,6 +299,62 @@ function selectedOptionFromMetadata(metadata: unknown): ExitPlanModeOption | und
   const description = (selectedOption as { readonly description?: unknown }).description;
   if (typeof label !== 'string' || typeof description !== 'string') return undefined;
   return { label, description };
+}
+
+function planApprovalFromMetadata(metadata: unknown): PlanApprovalMetadata | undefined {
+  if (metadata === null || typeof metadata !== 'object') return undefined;
+  const planApproval = (metadata as { readonly planApproval?: unknown }).planApproval;
+  if (planApproval === null || typeof planApproval !== 'object') return undefined;
+  const decision = (planApproval as { readonly decision?: unknown }).decision;
+  if (decision !== 'approved' && decision !== 'rejected' && decision !== 'cancelled') {
+    return undefined;
+  }
+  const selectedLabel = (planApproval as { readonly selectedLabel?: unknown }).selectedLabel;
+  const feedback = (planApproval as { readonly feedback?: unknown }).feedback;
+  return {
+    decision,
+    selectedLabel: typeof selectedLabel === 'string' ? selectedLabel : undefined,
+    feedback: typeof feedback === 'string' ? feedback : undefined,
+  };
+}
+
+function trackPlanApprovalResolution(agent: Agent, approval: PlanApprovalMetadata): void {
+  const selectedLabel = approval.selectedLabel ?? '';
+  const normalizedSelectedLabel = normalizeOptionLabel(selectedLabel);
+  const feedback = approval.feedback ?? '';
+  const hasFeedback = feedback.length > 0;
+
+  if (approval.decision === 'cancelled') {
+    agent.telemetry.track('plan_resolved', { outcome: 'dismissed' });
+    return;
+  }
+
+  if (approval.decision === 'approved') {
+    if (selectedLabel.length > 0) {
+      agent.telemetry.track('plan_resolved', {
+        outcome: 'approved',
+        chosen_option: selectedLabel,
+      });
+      return;
+    }
+    agent.telemetry.track('plan_resolved', { outcome: 'approved' });
+    return;
+  }
+
+  if (normalizedSelectedLabel === 'reject and exit') {
+    agent.telemetry.track('plan_resolved', { outcome: 'rejected_and_exited' });
+    return;
+  }
+
+  if (normalizedSelectedLabel === 'revise' || hasFeedback) {
+    agent.telemetry.track('plan_resolved', {
+      outcome: 'revise',
+      has_feedback: hasFeedback,
+    });
+    return;
+  }
+
+  agent.telemetry.track('plan_resolved', { outcome: 'rejected' });
 }
 
 function planTelemetryWasSubmitted(metadata: unknown): boolean {

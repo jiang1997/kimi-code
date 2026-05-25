@@ -44,24 +44,21 @@ function exitPlanModeApprovalResult(
   result: ApprovalResponse,
   options: readonly ExitPlanModeOption[] | undefined,
 ) {
-  if (result.decision === 'approved') {
-    const selected = selectedExitPlanModeOption(options, result.selectedLabel);
-    return {
-      kind: 'approve' as const,
-      executionMetadata:
-        selected === undefined
-          ? {
-              planTelemetrySubmitted: true,
-              planTelemetryResolved: true,
-            }
-          : {
-              selectedOption: selected,
-              planTelemetrySubmitted: true,
-              planTelemetryResolved: true,
-            },
-    };
+  const selected = selectedExitPlanModeOption(options, result.selectedLabel);
+  if (result.decision !== 'approved') {
+    return rejectedExitPlanModeApprovalResult(agent, result);
   }
 
+  return {
+    kind: 'approve' as const,
+    executionMetadata: {
+      planApproval: approvalMetadata(result),
+      selectedOption: selected,
+    },
+  };
+}
+
+function rejectedExitPlanModeApprovalResult(agent: Agent, result: ApprovalResponse) {
   if (result.decision === 'cancelled') {
     return {
       kind: 'result' as const,
@@ -119,6 +116,14 @@ function exitPlanModeForRejectedPlan(agent: Agent) {
       output: `Failed to exit plan mode: ${message}`,
     };
   }
+}
+
+function approvalMetadata(result: ApprovalResponse) {
+  return {
+    decision: result.decision,
+    selectedLabel: result.selectedLabel,
+    feedback: result.feedback,
+  };
 }
 
 function selectedExitPlanModeOption(

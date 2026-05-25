@@ -17,7 +17,8 @@ export async function executeTool<Input>(
   const { args, ...executionContext } = context;
   let execution: ToolExecution;
   try {
-    execution = await tool.resolveExecution(args);
+    const resolved = tool.resolveExecution(args);
+    execution = isPromiseLike(resolved) ? await resolved : resolved;
   } catch (error) {
     const output =
       error instanceof PathSecurityError
@@ -25,8 +26,12 @@ export async function executeTool<Input>(
         : `Tool "${tool.name}" failed to resolve execution: ${
             error instanceof Error ? error.message : String(error)
           }`;
-    return Promise.resolve({ isError: true, output });
+    return { isError: true, output };
   }
-  if (execution.isError === true) return Promise.resolve(execution);
+  if (execution.isError === true) return execution;
   return execution.execute(executionContext);
+}
+
+function isPromiseLike(value: ToolExecution | Promise<ToolExecution>): value is Promise<ToolExecution> {
+  return typeof (value as Promise<ToolExecution>).then === 'function';
 }

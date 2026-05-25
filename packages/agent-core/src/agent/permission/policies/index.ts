@@ -32,6 +32,7 @@ export function createPermissionDecisionPolicies(agent: Agent): readonly Permiss
     new UserConfiguredAllowPermissionPolicy(agent),
     new SessionApprovalHistoryPermissionPolicy(agent),
     new UserConfiguredAskPermissionPolicy(agent),
+    new PlanModeToolApprovePermissionPolicy(agent),
     new SensitiveFileAccessAskPermissionPolicy(agent),
     new GitControlPathAccessAskPermissionPolicy(agent),
     new CwdOutsideFileAccessAskPermissionPolicy(agent),
@@ -39,7 +40,6 @@ export function createPermissionDecisionPolicies(agent: Agent): readonly Permiss
     new YoloModeApprovePermissionPolicy(agent),
     new DefaultToolApprovePermissionPolicy(),
     new GitCwdWriteApprovePermissionPolicy(agent),
-    new PlanModeToolApprovePermissionPolicy(),
     new FallbackAskPermissionPolicy(),
   ];
 }

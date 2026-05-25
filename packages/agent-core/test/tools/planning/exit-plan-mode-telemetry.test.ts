@@ -62,8 +62,10 @@ function makeAgent(input: {
 }
 
 async function execute(agent: Agent, args: ExitPlanModeInput = {}) {
+  const mode = agent.permission.mode;
   const manager = new PermissionManager(agent);
-  manager.mode = agent.permission.mode;
+  Object.assign(agent, { permission: manager });
+  manager.mode = mode;
   const permissionResult = await manager.beforeToolCall(permissionContext(args));
   if (permissionResult?.syntheticResult !== undefined) {
     return permissionResult.syntheticResult;
@@ -139,7 +141,7 @@ describe('ExitPlanMode telemetry', () => {
     });
   });
 
-  it('tracks revision requests with feedback', async () => {
+  it('handles revision requests with feedback through permission approval telemetry', async () => {
     const { agent, telemetryTrack, exitPlanMode } = makeAgent({
       mode: 'manual',
       approval: {
@@ -153,13 +155,17 @@ describe('ExitPlanMode telemetry', () => {
 
     expect(result.isError).toBe(false);
     expect(exitPlanMode).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
-      outcome: 'revise',
-      has_feedback: true,
-    });
+    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_approval_result',
+      expect.objectContaining({
+        result: 'rejected',
+        has_feedback: true,
+      }),
+    );
   });
 
-  it('tracks plain rejections without exiting plan mode', async () => {
+  it('handles plain rejections without exiting plan mode', async () => {
     const { agent, telemetryTrack, exitPlanMode } = makeAgent({
       mode: 'manual',
       approval: { decision: 'rejected' },
@@ -169,12 +175,16 @@ describe('ExitPlanMode telemetry', () => {
 
     expect(result.isError).toBe(true);
     expect(exitPlanMode).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
-      outcome: 'rejected',
-    });
+    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_approval_result',
+      expect.objectContaining({
+        result: 'rejected',
+      }),
+    );
   });
 
-  it('tracks dismissed approval dialogs without exiting plan mode', async () => {
+  it('handles dismissed approval dialogs without exiting plan mode', async () => {
     const { agent, telemetryTrack, exitPlanMode } = makeAgent({
       mode: 'manual',
       approval: { decision: 'cancelled' },
@@ -185,12 +195,16 @@ describe('ExitPlanMode telemetry', () => {
     expect(result.isError).toBe(false);
     expect(result.output).toContain('dismissed');
     expect(exitPlanMode).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
-      outcome: 'dismissed',
-    });
+    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_approval_result',
+      expect.objectContaining({
+        result: 'cancelled',
+      }),
+    );
   });
 
-  it('tracks reject-and-exit and exits plan mode', async () => {
+  it('handles reject-and-exit and exits plan mode', async () => {
     const { agent, telemetryTrack, exitPlanMode } = makeAgent({
       mode: 'manual',
       approval: { decision: 'rejected', selectedLabel: 'Reject and Exit' },
@@ -201,8 +215,12 @@ describe('ExitPlanMode telemetry', () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain('Plan mode deactivated');
     expect(exitPlanMode).toHaveBeenCalledTimes(1);
-    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
-      outcome: 'rejected_and_exited',
-    });
+    expect(telemetryTrack).not.toHaveBeenCalledWith('plan_resolved', expect.anything());
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_approval_result',
+      expect.objectContaining({
+        result: 'rejected',
+      }),
+    );
   });
 });

@@ -268,14 +268,22 @@ function normalizeValue(value: unknown, uuidLabels: Map<string, string>): unknow
     return Object.fromEntries(
       Object.entries(value).map(([key, nested]) => [
         key,
-        key === 'time' && typeof nested === 'number'
-          ? '<time>'
-          : normalizeValue(nested, uuidLabels),
+        normalizeObjectField(key, nested, uuidLabels),
       ]),
     );
   }
 
   return value;
+}
+
+function normalizeObjectField(
+  key: string,
+  value: unknown,
+  uuidLabels: Map<string, string>,
+): unknown {
+  if (key === 'time' && typeof value === 'number') return '<time>';
+  if (key === 'cwd' && typeof value === 'string') return '<cwd>';
+  return normalizeValue(value, uuidLabels);
 }
 
 function stripUndefined(value: unknown): unknown {

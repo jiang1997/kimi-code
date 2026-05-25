@@ -1,5 +1,6 @@
 import type { Kaos } from '@moonshot-ai/kaos';
 import type { ToolCall } from '@moonshot-ai/kosong';
+import * as posixPath from 'node:path/posix';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Agent } from '../../src/agent';
@@ -17,6 +18,7 @@ import type { PermissionPolicyContext } from '../../src/agent/permission/policy'
 import { stableToolArgsKey } from '../../src/agent/permission/stable-args';
 import { ToolAccesses } from '../../src/loop';
 import type { ToolInputDisplay } from '../../src/tools/display';
+import { matchesRuleSubject } from '../../src/tools/support/rule-match';
 import { createFakeKaos } from '../tools/fixtures/fake-kaos';
 import { createCommandKaos, testAgent } from './harness/agent';
 
@@ -42,8 +44,8 @@ describe('Agent permission', () => {
       [emit] assistant.delta             { "turnId": 0, "delta": "Running without asking." }
       [emit] tool.call.delta             { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "argumentsPart": "{\\"command\\":\\"printf permission-output\\",\\"timeout\\":60}" }
       [wire] context.append_loop_event   { "event": { "type": "content.part", "uuid": "<uuid-2>", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "part": { "type": "text", "text": "Running without asking." } }, "time": "<time>" }
-      [wire] context.append_loop_event   { "event": { "type": "tool.call", "uuid": "call_bash", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output" }, "time": "<time>" }
-      [emit] tool.call.started           { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output" }
+      [wire] context.append_loop_event   { "event": { "type": "tool.call", "uuid": "call_bash", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output", "display": { "kind": "command", "command": "printf permission-output", "cwd": "<cwd>", "language": "bash" } }, "time": "<time>" }
+      [emit] tool.call.started           { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output", "display": { "kind": "command", "command": "printf permission-output", "cwd": "<cwd>", "language": "bash" } }
       [wire] context.append_loop_event   { "event": { "type": "tool.result", "parentUuid": "call_bash", "toolCallId": "call_bash", "result": { "output": "auto-output" } }, "time": "<time>" }
       [emit] tool.result                 { "turnId": 0, "toolCallId": "call_bash", "output": "auto-output" }
       [wire] context.append_loop_event   { "event": { "type": "step.end", "uuid": "<uuid-1>", "turnId": "0", "step": 1, "usage": { "inputOther": 91, "output": 25, "inputCacheRead": 0, "inputCacheCreation": 0 }, "finishReason": "tool_use" }, "time": "<time>" }
@@ -97,8 +99,8 @@ describe('Agent permission', () => {
       [emit] assistant.delta             { "turnId": 0, "delta": "Running in yolo mode." }
       [emit] tool.call.delta             { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "argumentsPart": "{\\"command\\":\\"printf permission-output\\",\\"timeout\\":60}" }
       [wire] context.append_loop_event   { "event": { "type": "content.part", "uuid": "<uuid-2>", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "part": { "type": "text", "text": "Running in yolo mode." } }, "time": "<time>" }
-      [wire] context.append_loop_event   { "event": { "type": "tool.call", "uuid": "call_bash", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output" }, "time": "<time>" }
-      [emit] tool.call.started           { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output" }
+      [wire] context.append_loop_event   { "event": { "type": "tool.call", "uuid": "call_bash", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output", "display": { "kind": "command", "command": "printf permission-output", "cwd": "<cwd>", "language": "bash" } }, "time": "<time>" }
+      [emit] tool.call.started           { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf permission-output", "timeout": 60 }, "description": "Running: printf permission-output", "display": { "kind": "command", "command": "printf permission-output", "cwd": "<cwd>", "language": "bash" } }
       [wire] context.append_loop_event   { "event": { "type": "tool.result", "parentUuid": "call_bash", "toolCallId": "call_bash", "result": { "output": "yolo-output" } }, "time": "<time>" }
       [emit] tool.result                 { "turnId": 0, "toolCallId": "call_bash", "output": "yolo-output" }
       [wire] context.append_loop_event   { "event": { "type": "step.end", "uuid": "<uuid-1>", "turnId": "0", "step": 1, "usage": { "inputOther": 7, "output": 25, "inputCacheRead": 0, "inputCacheCreation": 0 }, "finishReason": "tool_use" }, "time": "<time>" }
@@ -204,7 +206,7 @@ describe('Agent permission', () => {
       [emit] assistant.delta             { "turnId": 0, "delta": "I will try Bash." }
       [emit] tool.call.delta             { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "argumentsPart": "{\\"command\\":\\"printf should-not-run\\",\\"timeout\\":60}" }
       [wire] context.append_loop_event   { "event": { "type": "content.part", "uuid": "<uuid-2>", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "part": { "type": "text", "text": "I will try Bash." } }, "time": "<time>" }
-      [emit] requestApproval             { "turnId": 0, "toolCallId": "call_bash", "toolName": "Bash", "action": "run command", "display": { "kind": "generic", "summary": "Approve Bash", "detail": { "command": "printf should-not-run", "timeout": 60 } } }
+      [emit] requestApproval             { "turnId": 0, "toolCallId": "call_bash", "toolName": "Bash", "action": "Running: printf should-not-run", "display": { "kind": "command", "command": "printf should-not-run", "cwd": "<cwd>", "language": "bash" } }
     `);
     expect(ctx.lastLlmInput()).toMatchInlineSnapshot(`
       system: <system-prompt>
@@ -215,9 +217,9 @@ describe('Agent permission', () => {
 
     ctx.mockNextResponse({ type: 'text', text: 'I will not run the command.' });
     expect(await ctx.untilTurnEnd()).toMatchInlineSnapshot(`
-      [wire] permission.record_approval_result   { "turnId": 0, "toolCallId": "call_bash", "toolName": "Bash", "action": "run command", "result": { "decision": "rejected", "selectedLabel": "reject" }, "time": "<time>" }
-      [wire] context.append_loop_event           { "event": { "type": "tool.call", "uuid": "call_bash", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf should-not-run", "timeout": 60 } }, "time": "<time>" }
-      [emit] tool.call.started                   { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf should-not-run", "timeout": 60 } }
+      [wire] permission.record_approval_result   { "turnId": 0, "toolCallId": "call_bash", "toolName": "Bash", "action": "Running: printf should-not-run", "sessionApprovalKey": "Bash:72b1d6d3beeb60c93c5997c0e72131c53a226db8b4ce2f7dac97829e6e440d5c", "result": { "decision": "rejected", "selectedLabel": "reject" }, "time": "<time>" }
+      [wire] context.append_loop_event           { "event": { "type": "tool.call", "uuid": "call_bash", "turnId": "0", "step": 1, "stepUuid": "<uuid-1>", "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf should-not-run", "timeout": 60 }, "description": "Running: printf should-not-run", "display": { "kind": "command", "command": "printf should-not-run", "cwd": "<cwd>", "language": "bash" } }, "time": "<time>" }
+      [emit] tool.call.started                   { "turnId": 0, "toolCallId": "call_bash", "name": "Bash", "args": { "command": "printf should-not-run", "timeout": 60 }, "description": "Running: printf should-not-run", "display": { "kind": "command", "command": "printf should-not-run", "cwd": "<cwd>", "language": "bash" } }
       [wire] context.append_loop_event           { "event": { "type": "tool.result", "parentUuid": "call_bash", "toolCallId": "call_bash", "result": { "output": "Tool \\"Bash\\" was not run because the user rejected the approval request.", "isError": true } }, "time": "<time>" }
       [emit] tool.result                         { "turnId": 0, "toolCallId": "call_bash", "output": "Tool \\"Bash\\" was not run because the user rejected the approval request.", "isError": true }
       [wire] context.append_loop_event           { "event": { "type": "step.end", "uuid": "<uuid-1>", "turnId": "0", "step": 1, "usage": { "inputOther": 5, "output": 22, "inputCacheRead": 0, "inputCacheCreation": 0 }, "finishReason": "tool_use" }, "time": "<time>" }
@@ -323,9 +325,9 @@ describe('Permission auto mode', () => {
   });
 
   it.each([
-    ['auto', 'afk'],
-    ['yolo', 'yolo'],
-  ] as const)('tracks %s mode bypass as approval_mode=%s', async (mode, approvalMode) => {
+    ['auto', 'auto-mode-approve'],
+    ['yolo', 'yolo-mode-approve'],
+  ] as const)('tracks %s mode bypass through %s', async (mode, policyName) => {
     const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
       decision: 'approved',
     }));
@@ -334,13 +336,16 @@ describe('Permission auto mode', () => {
     await expect(manager.beforeToolCall(hookContext({ id: 'call_1' }))).resolves.toBeUndefined();
 
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('tool_approved', {
+    expect(telemetryTrack).toHaveBeenCalledWith('permission_policy_decision', {
+      policy_name: policyName,
       tool_name: 'Bash',
-      approval_mode: approvalMode,
+      permission_mode: mode,
+      decision: 'approve',
+      has_execution_metadata: false,
     });
   });
 
-  it('tracks plan-mode Bash bypass in auto mode as approval_mode=afk', async () => {
+  it('tracks plan-mode Bash bypass in auto mode through auto-mode-approve', async () => {
     const { manager, requestApproval, telemetryTrack } = makePermissionManager(
       async () => ({
         decision: 'approved',
@@ -352,14 +357,17 @@ describe('Permission auto mode', () => {
     await expect(manager.beforeToolCall(hookContext({ id: 'call_plan_bash' }))).resolves.toBeUndefined();
 
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('tool_approved', {
+    expect(telemetryTrack).toHaveBeenCalledWith('permission_policy_decision', {
+      policy_name: 'auto-mode-approve',
       tool_name: 'Bash',
-      approval_mode: 'afk',
+      permission_mode: 'auto',
+      decision: 'approve',
+      has_execution_metadata: false,
     });
   });
 
   it.each(['auto', 'yolo'] as const)(
-    'does not track approval for default-allowed tools in %s mode',
+    'tracks mode policy for default-allowed tools in %s mode',
     async (mode) => {
       const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
         decision: 'approved',
@@ -377,41 +385,25 @@ describe('Permission auto mode', () => {
       ).resolves.toBeUndefined();
 
       expect(requestApproval).not.toHaveBeenCalled();
-      expect(telemetryTrack).not.toHaveBeenCalled();
+      expect(telemetryTrack).toHaveBeenCalledWith(
+        'permission_policy_decision',
+        expect.objectContaining({
+          policy_name: mode === 'auto' ? 'auto-mode-approve' : 'yolo-mode-approve',
+          tool_name: 'Read',
+          permission_mode: mode,
+          decision: 'approve',
+        }),
+      );
     },
   );
 
   it.each(
-    (['manual', 'yolo', 'auto'] as const).flatMap((mode) =>
+    (['manual', 'yolo'] as const).flatMap((mode) =>
       [
-        [
-          mode,
-          'Read',
-          { path: '/tmp/notes.md' },
-          'read',
-          'read file outside of working directory',
-        ],
-        [
-          mode,
-          'ReadMediaFile',
-          { path: '/tmp/image.png' },
-          'read',
-          'read media file outside of working directory',
-        ],
-        [
-          mode,
-          'Write',
-          { path: '/tmp/notes.md', content: 'x' },
-          'write',
-          'write file outside of working directory',
-        ],
-        [
-          mode,
-          'Edit',
-          { path: '/tmp/notes.md', old_string: 'a', new_string: 'b' },
-          'edit',
-          'edit file outside of working directory',
-        ],
+        [mode, 'Read', { path: '/tmp/notes.md' }, 'read', 'read file'],
+        [mode, 'ReadMediaFile', { path: '/tmp/image.png' }, 'read', 'read media file'],
+        [mode, 'Write', { path: '/tmp/notes.md', content: 'x' }, 'write', 'write file'],
+        [mode, 'Edit', { path: '/tmp/notes.md', old_string: 'a', new_string: 'b' }, 'edit', 'edit file'],
       ] as const,
     ),
   )(
@@ -434,13 +426,39 @@ describe('Permission auto mode', () => {
             kind: 'file_io',
             operation,
             path: args.path,
-            detail: 'Path is outside the current working directory.',
           },
         }),
         expect.any(Object),
       );
     },
   );
+
+  it.each([
+    ['Read', { path: '/tmp/notes.md' }],
+    ['ReadMediaFile', { path: '/tmp/image.png' }],
+    ['Write', { path: '/tmp/notes.md', content: 'x' }],
+    ['Edit', { path: '/tmp/notes.md', old_string: 'a', new_string: 'b' }],
+  ] as const)('approves %s outside the cwd in auto mode', async (toolName, args) => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.setMode('auto');
+
+    await expect(
+      manager.beforeToolCall(hookContext({ id: `call_${toolName}`, toolName, args })),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'auto-mode-approve',
+        tool_name: toolName,
+        permission_mode: 'auto',
+        decision: 'approve',
+      }),
+    );
+  });
 
   it.each([
     ['Read', { path: '/workspace/notes.md' }],
@@ -464,8 +482,8 @@ describe('Permission auto mode', () => {
     },
   );
 
-  it.each(['manual', 'yolo', 'auto'] as const)(
-    'does not classify Grep path as an outside-cwd boundary in %s mode',
+  it.each(['manual', 'yolo'] as const)(
+    'requests approval for Grep search outside the cwd in %s mode',
     async (mode) => {
       const { manager, requestApproval } = makePermissionManager(async () => ({
         decision: 'approved',
@@ -482,9 +500,42 @@ describe('Permission auto mode', () => {
         ),
       ).resolves.toBeUndefined();
 
-      expect(requestApproval).not.toHaveBeenCalled();
+      expect(requestApproval).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: 'Grep',
+          action: "Searching for 'TODO' in /tmp",
+          display: { kind: 'file_io', operation: 'grep', path: '/tmp' },
+        }),
+        expect.any(Object),
+      );
     },
   );
+
+  it('approves Grep search outside the cwd in auto mode', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.setMode('auto');
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_grep_auto',
+          toolName: 'Grep',
+          args: { pattern: 'TODO', path: '/tmp' },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'auto-mode-approve',
+        tool_name: 'Grep',
+      }),
+    );
+  });
 
   it('keeps explicit deny rules higher priority than yolo outside-workspace approval', async () => {
     const { manager, requestApproval } = makePermissionManager(async () => ({
@@ -551,6 +602,7 @@ describe('Permission policy chain', () => {
       'user-configured-allow',
       'session-approval-history',
       'user-configured-ask',
+      'plan-mode-tool-approve',
       'sensitive-file-access-ask',
       'git-control-path-access-ask',
       'cwd-outside-file-access-ask',
@@ -558,7 +610,6 @@ describe('Permission policy chain', () => {
       'yolo-mode-approve',
       'default-tool-approve',
       'git-cwd-write-approve',
-      'plan-mode-tool-approve',
       'fallback-ask',
     ]);
   });
@@ -639,6 +690,7 @@ describe('Permission live derive', () => {
       toolCallId: 'call_parent',
       toolName: 'Bash',
       action: 'run command',
+      sessionApprovalKey: stableToolArgsKey('Bash', { command: 'printf first', timeout: 60 }),
       result: {
         decision: 'approved',
         scope: 'session',
@@ -654,7 +706,11 @@ describe('Permission live derive', () => {
 
     expect(child.requestApproval).not.toHaveBeenCalled();
     expect(child.manager.rules).toEqual([]);
-    expect(child.manager.data().rules).toContainEqual(sessionAllowRule());
+    expect(child.manager.data().rules).toEqual([]);
+    expect(child.manager.hasSessionApprovedKey(stableToolArgsKey('Bash', {
+      command: 'printf first',
+      timeout: 60,
+    }))).toBe(true);
   });
 
   it('uses child local mode for inherited non-deny decisions', async () => {
@@ -699,9 +755,8 @@ describe('Plan mode Bash permission policy', () => {
         toolName: 'Bash',
         action: 'run command',
         display: {
-          kind: 'generic',
-          summary: 'Approve Bash',
-          detail: { command: 'ls -la', timeout: 60 },
+          kind: 'command',
+          command: 'ls -la',
         },
       },
       { signal: expect.any(AbortSignal) },
@@ -717,6 +772,7 @@ describe('Plan mode Bash permission policy', () => {
       toolCallId: 'call_ordinary_bash',
       toolName: 'Bash',
       action: 'run command',
+      sessionApprovalKey: stableToolArgsKey('Bash', { command: 'ls -la', timeout: 60 }),
       result: {
         decision: 'approved',
         scope: 'session',
@@ -735,7 +791,11 @@ describe('Plan mode Bash permission policy', () => {
     ).resolves.toBeUndefined();
 
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(manager.data().rules).toContainEqual(sessionAllowRule());
+    expect(manager.data().rules).toEqual([]);
+    expect(manager.hasSessionApprovedKey(stableToolArgsKey('Bash', {
+      command: 'ls -la',
+      timeout: 60,
+    }))).toBe(true);
   });
 
   it.each(['yolo', 'auto'] as const)(
@@ -794,6 +854,11 @@ describe('ExitPlanMode permission policy', () => {
         id: 'call_exit',
         toolName: 'ExitPlanMode',
         args: { options: planOptions },
+        execution: planReviewExecution({
+          plan: '# Plan\n\n- Step',
+          path: '/tmp/plan.md',
+          options: planOptions,
+        }),
       }),
     );
 
@@ -802,7 +867,7 @@ describe('ExitPlanMode permission policy', () => {
         turnId: 0,
         toolCallId: 'call_exit',
         toolName: 'ExitPlanMode',
-        action: 'Review plan and choose an option',
+        action: 'Presenting plan and exiting plan mode',
         display: {
           kind: 'plan_review',
           plan: '# Plan\n\n- Step',
@@ -817,7 +882,8 @@ describe('ExitPlanMode permission policy', () => {
       turnId: 0,
       toolCallId: 'call_exit',
       toolName: 'ExitPlanMode',
-      action: 'Review plan and choose an option',
+      action: 'Presenting plan and exiting plan mode',
+      sessionApprovalKey: stableToolArgsKey('ExitPlanMode', { options: planOptions }),
       result: { decision: 'approved', selectedLabel: 'Approach B' },
     });
     expect(result).toMatchObject({
@@ -835,7 +901,12 @@ describe('ExitPlanMode permission policy', () => {
     });
 
     const result = await manager.beforeToolCall(
-      hookContext({ id: 'call_exit', toolName: 'ExitPlanMode', args: {} }),
+      hookContext({
+        id: 'call_exit',
+        toolName: 'ExitPlanMode',
+        args: {},
+        execution: planReviewExecution({ plan: '# Draft Plan', path: '/tmp/plan.md' }),
+      }),
     );
 
     expect(exit).not.toHaveBeenCalled();
@@ -856,7 +927,12 @@ describe('ExitPlanMode permission policy', () => {
     });
 
     const result = await manager.beforeToolCall(
-      hookContext({ id: 'call_exit', toolName: 'ExitPlanMode', args: {} }),
+      hookContext({
+        id: 'call_exit',
+        toolName: 'ExitPlanMode',
+        args: {},
+        execution: planReviewExecution({ plan: '# Draft Plan', path: '/tmp/plan.md' }),
+      }),
     );
 
     expect(exit).not.toHaveBeenCalled();
@@ -876,7 +952,12 @@ describe('ExitPlanMode permission policy', () => {
     });
 
     const result = await manager.beforeToolCall(
-      hookContext({ id: 'call_exit', toolName: 'ExitPlanMode', args: {} }),
+      hookContext({
+        id: 'call_exit',
+        toolName: 'ExitPlanMode',
+        args: {},
+        execution: planReviewExecution({ plan: '# Draft Plan', path: '/tmp/plan.md' }),
+      }),
     );
 
     expect(exit).not.toHaveBeenCalled();
@@ -901,7 +982,12 @@ describe('ExitPlanMode permission policy', () => {
     });
 
     const result = await manager.beforeToolCall(
-      hookContext({ id: 'call_exit', toolName: 'ExitPlanMode', args: {} }),
+      hookContext({
+        id: 'call_exit',
+        toolName: 'ExitPlanMode',
+        args: {},
+        execution: planReviewExecution({ plan: '# Draft Plan', path: '/tmp/plan.md' }),
+      }),
     );
 
     expect(exit).not.toHaveBeenCalled();
@@ -915,55 +1001,85 @@ describe('ExitPlanMode permission policy', () => {
 });
 
 describe('Agent-local approve for session', () => {
-  it('turns approved session-scoped responses into an agent-local allow cache', async () => {
+  it('turns approved session-scoped responses into an agent-local exact-key cache', async () => {
     const { manager, record, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
       decision: 'approved',
       scope: 'session',
       selectedLabel: 'Approve for this session',
     }));
+    const firstArgs = { command: 'printf first', timeout: 60 };
+    const firstKey = stableToolArgsKey('Bash', firstArgs);
 
     await expect(manager.beforeToolCall(hookContext({ id: 'call_1' }))).resolves.toBeUndefined();
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
-    expect(telemetryTrack).toHaveBeenNthCalledWith(1, 'tool_approved', {
-      tool_name: 'Bash',
-      approval_mode: 'manual',
-      scope: 'session',
-    });
+    expect(telemetryTrack).toHaveBeenNthCalledWith(
+      1,
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+        tool_name: 'Bash',
+        permission_mode: 'manual',
+        decision: 'ask',
+        approval_surface: 'command',
+      }),
+    );
+    expect(telemetryTrack).toHaveBeenNthCalledWith(
+      2,
+      'permission_approval_result',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+        tool_name: 'Bash',
+        permission_mode: 'manual',
+        result: 'approved_for_session',
+        session_cache_written: true,
+      }),
+    );
     expect(record).toHaveBeenCalledWith({
       type: 'permission.record_approval_result',
       turnId: 0,
       toolCallId: 'call_1',
       toolName: 'Bash',
       action: 'run command',
+      sessionApprovalKey: firstKey,
       result: {
         decision: 'approved',
         scope: 'session',
         selectedLabel: 'Approve for this session',
       },
     });
-    expect(manager.data().rules).toContainEqual({
-      decision: 'allow',
-      scope: 'session-runtime',
-      pattern: 'Bash',
-      reason: 'approve_for_session: run command',
-    });
+    expect(manager.data().rules).toEqual([]);
+    expect(manager.hasSessionApprovedKey(firstKey)).toBe(true);
 
     await expect(
       manager.beforeToolCall(
         hookContext({
           id: 'call_2',
-          args: { command: 'printf second', timeout: 60 },
+          args: firstArgs,
         }),
       ),
     ).resolves.toBeUndefined();
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
-    expect(telemetryTrack).toHaveBeenNthCalledWith(2, 'tool_approved', {
-      tool_name: 'Bash',
-      approval_mode: 'auto_session',
-      scope: 'session',
-    });
+    expect(telemetryTrack).toHaveBeenNthCalledWith(
+      3,
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'session-approval-history',
+        tool_name: 'Bash',
+        decision: 'approve',
+      }),
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_3',
+          args: { command: 'printf second', timeout: 60 },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(requestApproval).toHaveBeenCalledTimes(2);
   });
 
   it('keeps approved once responses one-shot', async () => {
@@ -982,6 +1098,7 @@ describe('Agent-local approve for session', () => {
       toolCallId: 'call_1',
       toolName: 'Bash',
       action: 'run command',
+      sessionApprovalKey: stableToolArgsKey('Bash', { command: 'printf first', timeout: 60 }),
       result: {
         decision: 'approved',
       },
@@ -992,6 +1109,7 @@ describe('Agent-local approve for session', () => {
       toolCallId: 'call_2',
       toolName: 'Bash',
       action: 'run command',
+      sessionApprovalKey: stableToolArgsKey('Bash', { command: 'printf first', timeout: 60 }),
       result: {
         decision: 'approved',
       },
@@ -1008,6 +1126,7 @@ describe('Agent-local approve for session', () => {
       toolCallId: 'call_session',
       toolName: 'Bash',
       action: 'run command',
+      sessionApprovalKey: stableToolArgsKey('Bash', { command: 'printf first', timeout: 60 }),
       result: {
         decision: 'approved',
         scope: 'session',
@@ -1031,7 +1150,10 @@ describe('Agent-local approve for session', () => {
 
   it('replays session approval wire events into agent permission state', () => {
     const ctx = testAgent();
-    const rule = sessionAllowRule();
+    const sessionApprovalKey = stableToolArgsKey('Bash', {
+      command: 'printf first',
+      timeout: 60,
+    });
 
     ctx.dispatch({
       type: 'permission.record_approval_result',
@@ -1039,6 +1161,7 @@ describe('Agent-local approve for session', () => {
       toolCallId: 'call_replay',
       toolName: 'Bash',
       action: 'run command',
+      sessionApprovalKey,
       result: {
         decision: 'approved',
         scope: 'session',
@@ -1046,7 +1169,8 @@ describe('Agent-local approve for session', () => {
       },
     });
 
-    expect(ctx.agent.permission.data().rules).toContainEqual(rule);
+    expect(ctx.agent.permission.data().rules).toEqual([]);
+    expect(ctx.agent.permission.hasSessionApprovedKey(sessionApprovalKey)).toBe(true);
   });
 
   it('replays one-shot approval wire events without adding session rules', () => {
@@ -1078,7 +1202,7 @@ describe('Agent-local approve for session', () => {
 });
 
 describe('Approval telemetry', () => {
-  it('tracks cancelled approval requests with approval_mode=cancelled', async () => {
+  it('tracks cancelled approval requests', async () => {
     const { manager, telemetryTrack } = makePermissionManager(async () => ({
       decision: 'cancelled',
       feedback: 'request closed',
@@ -1089,12 +1213,26 @@ describe('Approval telemetry', () => {
       reason: expect.stringContaining('approval request was cancelled'),
     });
 
-    expect(telemetryTrack).toHaveBeenCalledWith('tool_rejected', {
-      tool_name: 'Bash',
-      approval_mode: 'cancelled',
-      decision: 'cancelled',
-      has_feedback: true,
-    });
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+        tool_name: 'Bash',
+        permission_mode: 'manual',
+        decision: 'ask',
+      }),
+    );
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_approval_result',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+        tool_name: 'Bash',
+        permission_mode: 'manual',
+        result: 'cancelled',
+        has_feedback: true,
+        session_cache_written: false,
+      }),
+    );
   });
 });
 
@@ -1187,8 +1325,8 @@ describe('Default git CWD Write/Edit permission', () => {
       expect.any(Object),
     );
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
@@ -1204,11 +1342,15 @@ describe('Default git CWD Write/Edit permission', () => {
     ).resolves.toBeUndefined();
 
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('tool_approved', {
-      tool_name: 'Write',
-      approval_mode: 'manual',
-      auto_reason: 'default_git_cwd_write',
-    });
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'git-cwd-write-approve',
+        tool_name: 'Write',
+        permission_mode: 'manual',
+        decision: 'approve',
+      }),
+    );
   });
 
   it('bypasses approval for Edit on an absolute path inside the git cwd', async () => {
@@ -1225,11 +1367,15 @@ describe('Default git CWD Write/Edit permission', () => {
     ).resolves.toBeUndefined();
 
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('tool_approved', {
-      tool_name: 'Edit',
-      approval_mode: 'manual',
-      auto_reason: 'default_git_cwd_write',
-    });
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'git-cwd-write-approve',
+        tool_name: 'Edit',
+        permission_mode: 'manual',
+        decision: 'approve',
+      }),
+    );
   });
 
   it('still requests approval when cwd is not inside a git work tree', async () => {
@@ -1244,8 +1390,8 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
@@ -1290,8 +1436,8 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
@@ -1309,8 +1455,8 @@ describe('Default git CWD Write/Edit permission', () => {
 
       expect(requestApproval).toHaveBeenCalledTimes(1);
       expect(telemetryTrack).not.toHaveBeenCalledWith(
-        'tool_approved',
-        expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+        'permission_policy_decision',
+        expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
       );
     },
   );
@@ -1328,8 +1474,8 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
@@ -1353,12 +1499,12 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
-  it('still requests approval when a parent path segment is a symlink', async () => {
+  it('bypasses approval for a lexical path inside git cwd without resolving parent symlinks', async () => {
     const { kaos } = gitKaos({
       statModes: { '/workspace/out': SYMLINK_MODE },
     });
@@ -1371,14 +1517,14 @@ describe('Default git CWD Write/Edit permission', () => {
       manager.beforeToolCall(writeHook({ path: 'out/hosts', content: 'x' })),
     ).resolves.toBeUndefined();
 
-    expect(requestApproval).toHaveBeenCalledTimes(1);
-    expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
-  it('still requests approval when the target file is a symlink', async () => {
+  it('bypasses approval for a lexical target inside git cwd without resolving target symlinks', async () => {
     const { kaos } = gitKaos({
       statModes: { '/workspace/link.txt': SYMLINK_MODE },
     });
@@ -1391,10 +1537,10 @@ describe('Default git CWD Write/Edit permission', () => {
       manager.beforeToolCall(writeHook({ path: 'link.txt', content: 'x' })),
     ).resolves.toBeUndefined();
 
-    expect(requestApproval).toHaveBeenCalledTimes(1);
-    expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
@@ -1412,11 +1558,11 @@ describe('Default git CWD Write/Edit permission', () => {
     expect(requestApproval).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['.ENV', '.Aws/credentials'])(
-    'still requests approval for case-variant sensitive file %s',
+  it.each(['.env.local', '.aws/credentials'])(
+    'still requests approval for sensitive file %s',
     async (path) => {
       const { kaos } = gitKaos({
-        statModes: path.includes('/') ? { '/workspace/.Aws': DIR_MODE } : {},
+        statModes: path.includes('/') ? { '/workspace/.aws': DIR_MODE } : {},
       });
       const { manager, requestApproval, telemetryTrack } = makePermissionManager(
         async () => ({ decision: 'approved' }),
@@ -1428,8 +1574,8 @@ describe('Default git CWD Write/Edit permission', () => {
 
       expect(requestApproval).toHaveBeenCalledTimes(1);
       expect(telemetryTrack).not.toHaveBeenCalledWith(
-        'tool_approved',
-        expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+        'permission_policy_decision',
+        expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
       );
     },
   );
@@ -1446,11 +1592,15 @@ describe('Default git CWD Write/Edit permission', () => {
     ).resolves.toBeUndefined();
 
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('tool_approved', {
-      tool_name: 'Write',
-      approval_mode: 'manual',
-      auto_reason: 'default_git_cwd_write',
-    });
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'git-cwd-write-approve',
+        tool_name: 'Write',
+        permission_mode: 'manual',
+        decision: 'approve',
+      }),
+    );
   });
 
   it('lets an explicit `ask` rule keep the approval prompt for Write', async () => {
@@ -1472,12 +1622,12 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
-  it('lets an explicit `allow` rule take the original allow path without auto_reason telemetry', async () => {
+  it('lets an explicit `allow` rule take the original allow path without git cwd approval telemetry', async () => {
     const { kaos } = gitKaos();
     const { manager, requestApproval, telemetryTrack } = makePermissionManager(
       async () => ({ decision: 'approved' }),
@@ -1495,8 +1645,8 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).not.toHaveBeenCalled();
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
@@ -1522,12 +1672,12 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).not.toHaveBeenCalled();
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
-  it('does not fire in auto mode — existing afk telemetry path takes over', async () => {
+  it('does not fire in auto mode because auto-mode-approve takes over', async () => {
     const { kaos } = gitKaos();
     const { manager, requestApproval, telemetryTrack } = makePermissionManager(
       async () => ({ decision: 'approved' }),
@@ -1540,13 +1690,18 @@ describe('Default git CWD Write/Edit permission', () => {
     ).resolves.toBeUndefined();
 
     expect(requestApproval).not.toHaveBeenCalled();
-    expect(telemetryTrack).toHaveBeenCalledWith('tool_approved', {
-      tool_name: 'Write',
-      approval_mode: 'afk',
-    });
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'auto-mode-approve',
+        tool_name: 'Write',
+        permission_mode: 'auto',
+        decision: 'approve',
+      }),
+    );
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
@@ -1570,12 +1725,12 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
     expect(telemetryTrack).not.toHaveBeenCalledWith(
-      'tool_approved',
-      expect.objectContaining({ auto_reason: 'default_git_cwd_write' }),
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
     );
   });
 
-  it('caches the git marker check across repeated Write/Edit calls in the same cwd', async () => {
+  it('caches git marker checks across repeated Write/Edit calls in the same cwd', async () => {
     const { kaos, stat } = gitKaos();
     const { manager, requestApproval } = makePermissionManager(
       async () => ({ decision: 'approved' }),
@@ -1591,7 +1746,7 @@ describe('Default git CWD Write/Edit permission', () => {
 
     expect(requestApproval).not.toHaveBeenCalled();
     const markerCalls = stat.mock.calls.filter(([path]) => path === '/workspace/.git');
-    expect(markerCalls).toHaveLength(1);
+    expect(markerCalls).toHaveLength(2);
   });
 });
 
@@ -1607,76 +1762,81 @@ describe('Permission rule helpers', () => {
       argPattern: '!./src/**',
     });
     expect(parsePattern('  mcp__github__*  ')).toEqual({ toolName: 'mcp__github__*' });
-    expect(parsePattern('Read()')).toEqual({ toolName: 'Read' });
+    expect(parsePattern('Read()')).toEqual({ toolName: 'Read', argPattern: '' });
     expect(() => parsePattern('Read(/etc/**')).toThrow(/missing closing paren/);
     expect(() => parsePattern('')).toThrow(/empty string/);
   });
 
   it('matches rules against the tool-specific argument fields', () => {
-    expect(matchesRule(permissionRule('Bash(git *)'), 'Bash', { command: 'git status' })).toBe(
-      true,
-    );
-    expect(matchesRule(permissionRule('Bash(git *)'), 'Bash', { command: 'npm test' })).toBe(false);
-    expect(matchesRule(permissionRule('Read(/etc/**)'), 'Read', { path: '/etc/passwd' })).toBe(
-      true,
-    );
     expect(
-      matchesRule(permissionRule('Edit(!./src/**)', 'deny'), 'Edit', { path: './tests/foo.ts' }),
+      matchesRule(permissionRule('Bash(git .*)'), 'Bash', { command: 'git status' }, {
+        matchesRule: (ruleArgs) => matchesRuleSubject(ruleArgs, 'git status'),
+      }),
     ).toBe(true);
     expect(
-      matchesRule(permissionRule('Edit(!./src/**)', 'deny'), 'Edit', { path: './src/foo.ts' }),
+      matchesRule(permissionRule('Bash(git .*)'), 'Bash', { command: 'npm test' }, {
+        matchesRule: (ruleArgs) => matchesRuleSubject(ruleArgs, 'npm test'),
+      }),
     ).toBe(false);
     expect(
-      matchesRule(permissionRule('Agent(review-*)'), 'Agent', { subagent_type: 'review-code' }),
+      matchesRule(permissionRule('Read(/etc/.*)'), 'Read', { path: '/etc/passwd' }, {
+        matchesRule: (ruleArgs) => matchesRuleSubject(ruleArgs, '/etc/passwd'),
+      }),
+    ).toBe(true);
+    expect(
+      matchesRule(permissionRule('Agent(review-.*)'), 'Agent', {
+        subagent_type: 'review-code',
+      }, {
+        matchesRule: (ruleArgs) => matchesRuleSubject(ruleArgs, 'review-code'),
+      }),
     ).toBe(true);
     expect(matchesRule(permissionRule('mcp__github__*'), 'mcp__github__list_issues', {})).toBe(
       true,
     );
-    expect(matchesRule(permissionRule('Bash(git *)'), 'Bash', { command: 42 })).toBe(false);
+    expect(
+      matchesRule(permissionRule('Bash(git .*)'), 'Bash', { command: 42 }, {
+        matchesRule: (ruleArgs) => matchesRuleSubject(ruleArgs, '42'),
+      }),
+    ).toBe(false);
     expect(matchesRule(permissionRule('Bad(unclosed'), 'Bad', {})).toBe(false);
   });
 
-  it('matches path rules against lexical variants of the same absolute file', () => {
-    const secret = '/workspace/project/secret.txt';
-    const rule = permissionRule(`Read(${secret})`, 'deny');
-
-    expect(matchesRule(rule, 'Read', { path: secret })).toBe(true);
-    expect(matchesRule(rule, 'Read', { path: '/workspace/project/./secret.txt' })).toBe(true);
-    expect(matchesRule(rule, 'Read', { path: '/workspace/project/tmp/../secret.txt' })).toBe(true);
-    expect(matchesRule(rule, 'Read', { path: '/workspace/project/SECRET.txt' })).toBe(true);
+  it('falls back to stable args and single-field matching when execution has no matcher', () => {
     expect(
-      matchesRule(permissionRule(`Read(${secret})`, 'allow'), 'Read', {
-        path: '/workspace/project/SECRET.txt',
+      matchesRule(permissionRule('Bash("command":"git status")'), 'Bash', {
+        command: 'git status',
+      }),
+    ).toBe(true);
+    expect(
+      matchesRule(permissionRule('Bash(^git status$)'), 'Bash', {
+        command: 'git status',
+      }),
+    ).toBe(true);
+    expect(
+      matchesRule(permissionRule('Bash(^git status$)'), 'Bash', {
+        command: 'npm test',
+      }),
+    ).toBe(false);
+    expect(matchesRule(permissionRule('Read()'), 'Read', { path: '/workspace/a.ts' })).toBe(true);
+    expect(
+      matchesRule(permissionRule('Read([invalid'), 'Read', {
+        path: '/workspace/a.ts',
       }),
     ).toBe(false);
   });
 
-  it('matches win32 path rules across separators, dot segments, and case variants', () => {
-    const secret = 'C:\\workspace\\project\\secret.txt';
-    const denyRule = permissionRule(`Read(${secret})`, 'deny');
-    const allowRule = permissionRule(`Read(${secret})`, 'allow');
-    const context = { pathClass: 'win32' as const };
+  it('delegates rule argument semantics to execution.matchesRule when available', () => {
+    const execution = {
+      matchesRule: vi.fn((ruleArgs: string) => ruleArgs === 'semantic match'),
+    };
 
     expect(
-      matchesRule(denyRule, 'Read', { path: 'C:\\workspace\\project\\.\\secret.txt' }, context),
+      matchesRule(permissionRule('Read(semantic match)'), 'Read', { path: '/workspace/a.ts' }, execution),
     ).toBe(true);
+    expect(execution.matchesRule).toHaveBeenCalledWith('semantic match');
     expect(
-      matchesRule(
-        denyRule,
-        'Read',
-        { path: 'C:\\workspace\\project\\tmp\\..\\SECRET.txt' },
-        context,
-      ),
-    ).toBe(true);
-    expect(
-      matchesRule(denyRule, 'Read', { path: 'C:/workspace/project/secret.txt' }, context),
-    ).toBe(true);
-    expect(
-      matchesRule(denyRule, 'Read', { path: 'C:/workspace\\project/tmp\\..\\SECRET.txt' }, context),
-    ).toBe(true);
-    expect(
-      matchesRule(allowRule, 'Read', { path: 'C:\\workspace\\project\\SECRET.txt' }, context),
-    ).toBe(true);
+      matchesRule(permissionRule('Read(other)'), 'Read', { path: '/workspace/a.ts' }, execution),
+    ).toBe(false);
   });
 
 });
@@ -1791,6 +1951,7 @@ function hookContext(input: {
   readonly id: string;
   readonly toolName?: string | undefined;
   readonly args?: Record<string, unknown> | undefined;
+  readonly execution?: PermissionPolicyContext['execution'] | undefined;
 }): PermissionPolicyContext {
   const toolName = input.toolName ?? 'Bash';
   const args = input.args ?? { command: 'printf first', timeout: 60 };
@@ -1809,7 +1970,7 @@ function hookContext(input: {
     llm: {} as PermissionPolicyContext['llm'],
     toolCall,
     args,
-    execution: testExecution(toolName, args),
+    execution: input.execution ?? testExecution(toolName, args),
   };
 }
 
@@ -1824,17 +1985,26 @@ function permissionRule(
   };
 }
 
-function sessionAllowRule(): PermissionRule {
-  return {
-    decision: 'allow',
-    scope: 'session-runtime',
-    pattern: 'Bash',
-    reason: 'approve_for_session: run command',
-  };
-}
-
 function genericDisplay(): ToolInputDisplay {
   return { kind: 'generic', summary: 'Approve tool', detail: {} };
+}
+
+function planReviewExecution(input: {
+  readonly plan: string;
+  readonly path?: string | undefined;
+  readonly options?: readonly { readonly label: string; readonly description: string }[] | undefined;
+}): PermissionPolicyContext['execution'] {
+  return {
+    description: 'Presenting plan and exiting plan mode',
+    display: {
+      kind: 'plan_review',
+      plan: input.plan,
+      path: input.path,
+      options: input.options,
+    },
+    accesses: ToolAccesses.none(),
+    execute: async () => ({ output: '' }),
+  };
 }
 
 function testExecution(
@@ -1842,14 +2012,14 @@ function testExecution(
   args: Record<string, unknown>,
 ): PermissionPolicyContext['execution'] {
   return {
-    description: testDescription(toolName),
+    description: testDescription(toolName, args),
     display: testDisplay(toolName, args),
     accesses: testAccesses(toolName, args),
     execute: async () => ({ output: '' }),
   };
 }
 
-function testDescription(toolName: string): string {
+function testDescription(toolName: string, args: Record<string, unknown>): string {
   switch (toolName) {
     case 'Bash':
       return 'run command';
@@ -1857,35 +2027,62 @@ function testDescription(toolName: string): string {
       return 'review plan';
     case 'Read':
       return 'read file';
+    case 'ReadMediaFile':
+      return 'read media file';
     case 'Write':
       return 'write file';
     case 'Edit':
       return 'edit file';
+    case 'Grep':
+      return `Searching for '${stringArg(args, 'pattern')}' in ${stringArg(args, 'path', '/workspace')}`;
+    case 'Glob':
+      return `Searching ${stringArg(args, 'pattern')}`;
     default:
       return `call ${toolName}`;
   }
+}
+
+function stringArg(args: Record<string, unknown>, key: string, fallback = ''): string {
+  const value = args[key];
+  return typeof value === 'string' ? value : fallback;
 }
 
 function testDisplay(toolName: string, args: Record<string, unknown>): ToolInputDisplay {
   const path = typeof args['path'] === 'string' ? args['path'] : '/workspace/file.txt';
   switch (toolName) {
     case 'Bash':
-      return { kind: 'command', command: String(args['command'] ?? '') };
+      return {
+        kind: 'command',
+        command: typeof args['command'] === 'string' ? args['command'] : '',
+      };
     case 'Read':
+    case 'ReadMediaFile':
       return { kind: 'file_io', operation: 'read', path };
     case 'Write':
       return { kind: 'file_io', operation: 'write', path };
     case 'Edit':
       return { kind: 'file_io', operation: 'edit', path };
+    case 'Grep':
+      return { kind: 'file_io', operation: 'grep', path };
+    case 'Glob':
+      return { kind: 'file_io', operation: 'glob', path };
     default:
       return genericDisplay();
   }
 }
 
 function testAccesses(toolName: string, args: Record<string, unknown>) {
-  const path = typeof args['path'] === 'string' ? args['path'] : undefined;
+  const path = typeof args['path'] === 'string' ? canonicalTestPath(args['path']) : undefined;
   if (toolName === 'Read' && path !== undefined) return ToolAccesses.readFile(path);
+  if (toolName === 'ReadMediaFile' && path !== undefined) return ToolAccesses.readFile(path);
   if (toolName === 'Write' && path !== undefined) return ToolAccesses.writeFile(path);
   if (toolName === 'Edit' && path !== undefined) return ToolAccesses.readWriteFile(path);
+  if ((toolName === 'Grep' || toolName === 'Glob') && path !== undefined) {
+    return ToolAccesses.searchTree(path);
+  }
   return ToolAccesses.none();
+}
+
+function canonicalTestPath(path: string): string {
+  return posixPath.isAbsolute(path) ? posixPath.normalize(path) : posixPath.resolve('/workspace', path);
 }

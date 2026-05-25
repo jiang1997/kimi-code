@@ -86,6 +86,13 @@
 
 - 用户配置 `ask` rule 命中 -> `ask`
 
+## plan-mode-tool-approve: Plan Mode Tool Approve
+
+- `EnterPlanMode` -> `approve`
+- plan mode active 且 `Write` / `Edit` 目标是当前 plan file -> `approve`
+- `ExitPlanMode` 不在 plan mode active 状态 -> `approve`
+- `ExitPlanMode` 在 plan mode active 但没有有效 plan 内容 -> `approve`
+
 ## sensitive-file-access-ask: Sensitive File Access Ask
 
 - `execution.accesses` 中存在敏感文件 `.env` / SSH private key / credentials path -> `ask`
@@ -113,12 +120,6 @@
 ## git-cwd-write-approve: Git CWD Write Approve
 
 - tool name 为 `Write` / `Edit`，且 `execution.accesses` 中的写目标在 POSIX git cwd 内、目标在 cwd 内 -> `approve`
-
-## plan-mode-tool-approve: Plan Mode Tool Approve
-
-- `EnterPlanMode` -> `approve`
-- `ExitPlanMode` 不在 plan mode active 状态 -> `approve`
-- `ExitPlanMode` 在 plan mode active 但没有有效 plan 内容 -> `approve`
 
 ## fallback-ask: Fallback
 
