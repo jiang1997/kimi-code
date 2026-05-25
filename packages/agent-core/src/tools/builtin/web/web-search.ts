@@ -12,6 +12,7 @@ import type { BuiltinTool } from '../../../agent/tool';
 import { ToolAccesses } from '../../../loop/tool-access';
 import type { ExecutableToolContext, ExecutableToolResult, ToolExecution } from '../../../loop/types';
 import { toInputJsonSchema } from '../../support/input-schema';
+import { matchesRuleSubject } from '../../support/rule-match';
 import { ToolResultBuilder } from '../../support/result-builder';
 import DESCRIPTION from './web-search.md';
 
@@ -70,6 +71,8 @@ export class WebSearchTool implements BuiltinTool<WebSearchInput> {
     return {
       accesses: ToolAccesses.none(),
       description: `Searching: ${preview}`,
+      display: { kind: 'search', query: args.query },
+      matchesRule: (ruleArgs) => matchesRuleSubject(ruleArgs, args.query),
       execute: (ctx) => this.execution(args, ctx),
     };
   }

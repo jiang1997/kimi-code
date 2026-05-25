@@ -1,29 +1,37 @@
-import type { PrepareToolExecutionResult, ToolExecutionHookContext } from '../../loop';
-import type { ToolInputDisplay } from '../../tools/display';
-import type { PermissionRule } from './types';
+import type { PrepareToolExecutionResult, ResolvedToolExecutionHookContext } from '../../loop';
+import type { ExecutableToolResult } from '../../loop/types';
+import type { ApprovalResponse } from './types';
 
-export interface PermissionPolicyContext extends ToolExecutionHookContext {
-  /**
-   * The rule matched by `checkPermission()`, if any.
-   *
-   * Policies that want to defer to user-defined rules (e.g. a default-allow
-   * policy that should not override an explicit `ask`/`deny` rule) inspect
-   * this to decide whether to fire. `undefined` means the decision came
-   * from the built-in default permission table rather than a user rule.
-  */
-  readonly matchedRule: PermissionRule | undefined;
-}
+export type PermissionDecision = 'approve' | 'deny' | 'ask';
+
+export type PermissionReasonValue = string | number | boolean | null;
+
+export type PermissionDecisionReason = Readonly<Record<string, PermissionReasonValue>>;
+
+export type PermissionPolicyResolution =
+  | PermissionPolicyResult
+  | ({ readonly kind: 'result' } & PrepareToolExecutionResult);
+
+export interface PermissionPolicyContext extends ResolvedToolExecutionHookContext {}
 
 export type PermissionPolicyResult =
   | {
-      readonly kind: 'allow';
+      readonly kind: 'approve';
+      readonly reason?: PermissionDecisionReason;
       readonly executionMetadata?: unknown;
     }
-  | ({ readonly kind: 'result' } & PrepareToolExecutionResult)
+  | {
+      readonly kind: 'deny';
+      readonly reason?: PermissionDecisionReason;
+      readonly message?: string;
+    }
   | {
       readonly kind: 'ask';
-      readonly action?: string | undefined;
-      readonly display?: ToolInputDisplay | undefined;
+      readonly reason?: PermissionDecisionReason;
+      readonly resolveApproval?: (
+        result: ApprovalResponse,
+      ) => PermissionPolicyResolution | undefined;
+      readonly resolveError?: (error: unknown) => PermissionPolicyResolution | undefined;
     };
 
 export interface PermissionPolicy {
@@ -31,4 +39,8 @@ export interface PermissionPolicy {
   evaluate(
     context: PermissionPolicyContext,
   ): PermissionPolicyResult | undefined | Promise<PermissionPolicyResult | undefined>;
+}
+
+export function syntheticResult(result: ExecutableToolResult): PermissionPolicyResolution {
+  return { kind: 'result', syntheticResult: result };
 }

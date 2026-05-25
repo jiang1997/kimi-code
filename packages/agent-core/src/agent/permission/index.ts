@@ -1,35 +1,43 @@
 import type { Agent } from '..';
-import type { PrepareToolExecutionResult, ToolExecutionHookContext } from '../../loop';
-import type { TelemetryPropertyValue } from '../../telemetry';
-import { isDefaultAutoAllowTool } from '../../tools/policies/default-permissions';
+import type { PrepareToolExecutionResult } from '../../loop';
+import type { TelemetryProperties } from '../../telemetry';
 import type { ToolInputDisplay } from '../../tools/display';
-import { actionToRulePattern, describeApprovalAction } from './action-label';
-import { checkMatchingRules, type CheckRulesResult } from './check-rules';
-import type { PermissionPathMatchOptions } from './path-glob-match';
 import { createPermissionDecisionPolicies } from './policies';
-import type { PermissionPolicy, PermissionPolicyResult } from './policy';
 import type {
+  PermissionDecisionReason,
+  PermissionPolicy,
+  PermissionPolicyContext,
+  PermissionPolicyResolution,
+  PermissionPolicyResult,
+  PermissionReasonValue,
+} from './policy';
+import type {
+  ApprovalResponse,
   PermissionApprovalResultRecord,
   PermissionData,
   PermissionMode,
   PermissionRule,
 } from './types';
+import { stableToolArgsKey } from './stable-args';
+
 export * from './policy';
 export * from './types';
 
-type ApprovalTelemetryMode = 'manual' | 'yolo' | 'afk' | 'auto_session' | 'cancelled';
-
 export interface PermissionManagerOptions {
-  readonly initialRules?: readonly PermissionRule[] | undefined;
-  readonly policies?: readonly PermissionPolicy[] | undefined;
-  readonly parent?: PermissionManager | undefined;
+  readonly initialRules?: readonly PermissionRule[];
+  readonly parent?: PermissionManager;
+}
+
+interface PolicyEvaluation {
+  readonly policyName: string;
+  readonly result: PermissionPolicyResult;
 }
 
 export class PermissionManager {
   rules: PermissionRule[] = [];
   private modeOverride: PermissionMode | undefined;
   private readonly parent: PermissionManager | undefined;
-  private readonly sessionApprovedActions = new Set<string>();
+  private readonly sessionApprovedKeys = new Set<string>();
   private readonly policies: readonly PermissionPolicy[];
 
   constructor(
@@ -38,7 +46,7 @@ export class PermissionManager {
   ) {
     this.rules = [...(options.initialRules ?? [])];
     this.parent = options.parent;
-    this.policies = options.policies ?? createPermissionDecisionPolicies(this.agent);
+    this.policies = createPermissionDecisionPolicies(this.agent);
   }
 
   get mode(): PermissionMode {
@@ -81,211 +89,139 @@ export class PermissionManager {
     if (record.result.decision !== 'approved' || record.result.scope !== 'session') {
       return;
     }
-    if (this.sessionApprovedActions.has(record.action)) return;
+    if (record.sessionApprovalKey === undefined) return;
+    this.sessionApprovedKeys.add(record.sessionApprovalKey);
+  }
 
-    const pattern = actionToRulePattern(record.action, record.toolName);
-    this.sessionApprovedActions.add(record.action);
-    if (pattern === undefined) return;
-
-    const rule: PermissionRule = {
-      decision: 'allow',
-      scope: 'session-runtime',
-      pattern,
-      reason: `approve_for_session: ${record.action}`,
-    };
-    if (!this.hasRule(rule)) {
-      this.rules.push(rule);
-    }
+  hasSessionApprovedKey(key: string): boolean {
+    return this.sessionApprovedKeys.has(key) || this.parent?.hasSessionApprovedKey(key) === true;
   }
 
   async beforeToolCall(
-    context: ToolExecutionHookContext,
+    context: PermissionPolicyContext,
   ): Promise<PrepareToolExecutionResult | undefined> {
-    const name = context.toolCall.function.name;
-    const args = context.args;
+    const evaluation = await this.evaluatePolicies(context);
+    if (evaluation === undefined) return undefined;
 
-    const mode = this.mode;
-    const { decision, matchedRule } = this.checkPermission(name, args, mode);
-    if (decision === 'deny') {
-      return {
-        block: true,
-        reason: this.formatMessage(name, matchedRule?.reason),
-      };
-    }
-
-    const policyResult = await this.evaluatePolicies(context, matchedRule);
-    if (policyResult !== undefined) {
-      return this.permissionPolicyResultToPrepare(policyResult, context);
-    }
-
-    if (mode === 'auto') {
-      if (this.wouldAskInManualMode(name, args)) {
-        this.trackToolApproved(name, 'afk');
-      }
-      return undefined;
-    }
-    if (mode === 'yolo') {
-      if (this.wouldAskInManualMode(name, args)) {
-        this.trackToolApproved(name, 'yolo');
-      }
-      return undefined;
-    }
-
-    if (decision === 'allow') {
-      if (matchedRule?.scope === 'session-runtime') {
-        this.trackToolApproved(name, 'auto_session', 'session');
-      }
-      return undefined;
-    }
-
-    // decision === 'ask' → bounce through ApprovalRuntime.
-    return this.requestToolApproval(context);
+    this.trackPolicyDecision(evaluation.policyName, context, evaluation.result);
+    return this.permissionPolicyResolutionToPrepare(
+      evaluation.result,
+      context,
+      evaluation.policyName,
+    );
   }
 
   private async requestToolApproval(
-    context: ToolExecutionHookContext,
-    options: {
-      readonly action?: string | undefined;
-      readonly display?: ToolInputDisplay | undefined;
-    } = {},
+    context: PermissionPolicyContext,
+    result: Extract<PermissionPolicyResult, { kind: 'ask' }>,
+    policyName: string | undefined,
   ): Promise<PrepareToolExecutionResult | undefined> {
     const { signal } = context;
     const id = context.toolCall.id;
     const name = context.toolCall.function.name;
-    const args = context.args;
-    const display =
-      options.display ?? ({
-        kind: 'generic',
-        summary: `Approve ${name}`,
-        detail: args,
-      } satisfies ToolInputDisplay);
-    const action = options.action ?? describeApprovalAction(name, args, display);
-    if (this.sessionApprovedActions.has(action)) {
-      this.trackToolApproved(name, 'auto_session', 'session');
-      return undefined;
+    const display = approvalDisplayForExecution(name, context.execution);
+    const action = approvalActionForExecution(name, context.execution);
+    const sessionApprovalKey = stableToolArgsKey(name, context.args);
+    const startedAt = Date.now();
+
+    let response: ApprovalResponse;
+    try {
+      response = await this.agent.rpc.requestApproval(
+        {
+          turnId: Number(context.turnId),
+          toolCallId: id,
+          toolName: name,
+          action,
+          display,
+        },
+        { signal },
+      );
+    } catch (error) {
+      this.trackApprovalResult({
+        policyName,
+        toolName: name,
+        display,
+        result: 'error',
+        durationMs: Date.now() - startedAt,
+        sessionCacheWritten: false,
+      });
+      const resolved = result.resolveError?.(error);
+      return resolved === undefined
+        ? Promise.reject(error)
+        : this.permissionPolicyResolutionToPrepare(resolved, context, policyName);
     }
 
-    const result = await this.agent.rpc.requestApproval(
-      {
-        turnId: Number(context.turnId),
-        toolCallId: id,
-        toolName: name,
-        action,
-        display,
-      },
-      { signal },
-    );
     this.recordApprovalResult({
       turnId: Number(context.turnId),
       toolCallId: id,
       toolName: name,
       action,
-      result,
+      sessionApprovalKey,
+      result: response,
+    });
+    this.trackApprovalResult({
+      policyName,
+      toolName: name,
+      display,
+      result: approvalTelemetryResult(response),
+      durationMs: Date.now() - startedAt,
+      sessionCacheWritten: response.decision === 'approved' && response.scope === 'session',
+      hasFeedback: response.feedback !== undefined && response.feedback.length > 0,
     });
 
-    if (result.decision === 'approved') {
-      this.trackToolApproved(
-        name,
-        approvalTelemetryMode(this.mode),
-        result.scope === 'session' ? 'session' : 'once',
-      );
+    const resolved = result.resolveApproval?.(response);
+    if (resolved !== undefined) {
+      return this.permissionPolicyResolutionToPrepare(resolved, context, policyName);
+    }
+
+    if (response.decision === 'approved') {
       return undefined;
     }
 
-    this.agent.telemetry.track('tool_rejected', {
-      tool_name: name,
-      approval_mode:
-        result.decision === 'cancelled' ? 'cancelled' : approvalTelemetryMode(this.mode),
-      decision: result.decision,
-      has_feedback: result.feedback !== undefined && result.feedback.length > 0,
-    });
-
     return {
       block: true,
-      reason: this.formatApprovalRejectionMessage(name, result),
+      reason: this.formatApprovalRejectionMessage(name, response),
     };
   }
 
   private async evaluatePolicies(
-    context: ToolExecutionHookContext,
-    matchedRule: PermissionRule | undefined,
-  ): Promise<PermissionPolicyResult | undefined> {
+    context: PermissionPolicyContext,
+  ): Promise<PolicyEvaluation | undefined> {
     for (const policy of this.policies) {
-      const result = await policy.evaluate({
-        ...context,
-        matchedRule,
-      });
-      if (result !== undefined) return result;
+      const result = await policy.evaluate(context);
+      if (result !== undefined) {
+        return { policyName: policy.name, result };
+      }
     }
     return undefined;
-  }
-
-  private checkPermission(
-    toolName: string,
-    toolInput: unknown,
-    mode: PermissionMode = this.mode,
-  ): CheckRulesResult {
-    const matched = this.checkMatchingPermissionRules(toolName, toolInput, mode);
-    if (matched !== undefined) return matched;
-    if (isDefaultAutoAllowTool(toolName)) return { decision: 'allow' };
-    if (mode === 'yolo' || mode === 'auto') return { decision: 'allow' };
-    return { decision: 'ask' };
-  }
-
-  private checkMatchingPermissionRules(
-    toolName: string,
-    toolInput: unknown,
-    mode: PermissionMode,
-  ): CheckRulesResult | undefined {
-    return (
-      checkMatchingRules(this.rules, toolName, toolInput, mode, this.pathMatchOptions()) ??
-      this.parent?.checkMatchingPermissionRules(toolName, toolInput, mode)
-    );
   }
 
   private effectiveRules(): PermissionRule[] {
     return [...this.rules, ...(this.parent?.effectiveRules() ?? [])];
   }
 
-  private wouldAskInManualMode(toolName: string, toolInput: unknown): boolean {
-    return this.checkPermission(toolName, toolInput, 'manual').decision === 'ask';
-  }
-
-  private permissionPolicyResultToPrepare(
-    result: PermissionPolicyResult,
-    context: ToolExecutionHookContext,
+  private permissionPolicyResolutionToPrepare(
+    result: PermissionPolicyResolution,
+    context: PermissionPolicyContext,
+    policyName?: string,
   ): Promise<PrepareToolExecutionResult | undefined> | PrepareToolExecutionResult | undefined {
     switch (result.kind) {
-      case 'allow':
+      case 'approve':
         return result.executionMetadata === undefined
           ? undefined
           : { executionMetadata: result.executionMetadata };
+      case 'deny':
+        return {
+          block: true,
+          reason: result.message ?? this.formatPolicyDenyMessage(context.toolCall.function.name),
+        };
       case 'ask':
-        return this.requestToolApproval(context, result);
+        return this.requestToolApproval(context, result, policyName);
       case 'result': {
         const { kind: _kind, ...prepareResult } = result;
         return prepareResult;
       }
     }
-  }
-
-  private hasRule(target: PermissionRule): boolean {
-    return this.rules.some((rule) => {
-      return (
-        rule.decision === target.decision &&
-        rule.scope === target.scope &&
-        rule.pattern === target.pattern &&
-        rule.reason === target.reason
-      );
-    });
-  }
-
-  protected formatMessage(toolName: string, reason?: string): string {
-    const suffix = reason !== undefined && reason.length > 0 ? ` Reason: ${reason}` : '';
-    if (this.agent.type === 'sub') {
-      return `Tool "${toolName}" was denied.${suffix} Try a different approach — don't retry the same call, don't attempt to bypass the restriction.`;
-    }
-    return `Tool "${toolName}" was denied by permission rule.${suffix}`;
   }
 
   protected formatApprovalRejectionMessage(
@@ -306,32 +242,100 @@ export class PermissionManager {
     return `${prefix}${suffix}`;
   }
 
-  private pathMatchOptions(): PermissionPathMatchOptions {
-    return {
-      cwd: this.agent.config.cwd,
-      pathClass: this.agent.runtime.kaos.pathClass(),
-      homeDir: this.agent.runtime.kaos.gethome(),
-    };
+  private formatPolicyDenyMessage(toolName: string): string {
+    const prefix = `Tool "${toolName}" was denied by permission policy.`;
+    if (this.agent.type === 'sub') {
+      return `${prefix} Try a different approach — don't retry the same call, don't attempt to bypass the restriction.`;
+    }
+    return prefix;
   }
 
-  private trackToolApproved(
-    toolName: string,
-    approvalMode: Exclude<ApprovalTelemetryMode, 'cancelled'>,
-    scope?: 'once' | 'session',
+  private trackPolicyDecision(
+    policyName: string,
+    context: PermissionPolicyContext,
+    result: PermissionPolicyResult,
   ): void {
-    const properties: Record<string, TelemetryPropertyValue> = {
-      tool_name: toolName,
-      approval_mode: approvalMode,
+    const properties: Record<string, TelemetryProperties[string]> = {
+      policy_name: policyName,
+      tool_name: context.toolCall.function.name,
+      permission_mode: this.mode,
+      decision: result.kind,
     };
-    if (scope !== undefined) {
-      properties['scope'] = scope;
+    addReasonProperties(properties, result.reason);
+    if (result.kind === 'ask') {
+      properties['approval_surface'] = context.execution.display?.kind ?? null;
     }
-    this.agent.telemetry.track('tool_approved', properties);
+    if (result.kind === 'approve') {
+      properties['has_execution_metadata'] = result.executionMetadata !== undefined;
+    }
+    this.agent.telemetry.track('permission_policy_decision', properties);
+  }
+
+  private trackApprovalResult(input: {
+    readonly policyName: string | undefined;
+    readonly toolName: string;
+    readonly display: ToolInputDisplay;
+    readonly result: 'approved' | 'approved_for_session' | 'rejected' | 'cancelled' | 'error';
+    readonly durationMs: number;
+    readonly sessionCacheWritten: boolean;
+    readonly hasFeedback?: boolean;
+  }): void {
+    const properties: Record<string, TelemetryProperties[string]> = {
+      policy_name: input.policyName ?? null,
+      tool_name: input.toolName,
+      permission_mode: this.mode,
+      result: input.result,
+      approval_surface: input.display.kind,
+      duration_ms: input.durationMs,
+      session_cache_written: input.sessionCacheWritten,
+      has_feedback: input.hasFeedback === true,
+    };
+    this.agent.telemetry.track('permission_approval_result', properties);
   }
 }
 
-function approvalTelemetryMode(
-  mode: PermissionMode,
-): Extract<ApprovalTelemetryMode, 'manual' | 'yolo' | 'afk'> {
-  return mode === 'auto' ? 'afk' : mode;
+function approvalDisplayForExecution(
+  toolName: string,
+  execution: PermissionPolicyContext['execution'],
+): ToolInputDisplay {
+  return (
+    execution.display ?? {
+      kind: 'generic',
+      summary: execution.description ?? `Approve ${toolName}`,
+    }
+  );
+}
+
+function approvalActionForExecution(
+  toolName: string,
+  execution: PermissionPolicyContext['execution'],
+): string {
+  return execution.description ?? `Call ${toolName}`;
+}
+
+function approvalTelemetryResult(
+  result: ApprovalResponse,
+): 'approved' | 'approved_for_session' | 'rejected' | 'cancelled' {
+  if (result.decision === 'approved' && result.scope === 'session') return 'approved_for_session';
+  return result.decision;
+}
+
+function addReasonProperties(
+  properties: Record<string, TelemetryProperties[string]>,
+  reason: PermissionDecisionReason | undefined,
+): void {
+  if (reason === undefined) return;
+  for (const [key, value] of Object.entries(reason)) {
+    if (!isReasonTelemetryValue(value)) continue;
+    properties[key] = value;
+  }
+}
+
+function isReasonTelemetryValue(value: unknown): value is PermissionReasonValue {
+  return (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  );
 }

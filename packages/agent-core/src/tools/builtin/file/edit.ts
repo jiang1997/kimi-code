@@ -16,6 +16,7 @@ import { ToolAccesses } from '../../../loop/tool-access';
 import type { ExecutableToolResult, ToolExecution } from '../../../loop/types';
 import { resolvePathAccessPath } from '../../policies/path-access';
 import { toInputJsonSchema } from '../../support/input-schema';
+import { matchesAnyRuleSubject } from '../../support/rule-match';
 import type { WorkspaceConfig } from '../../support/workspace';
 import { materializeModelText, toModelTextView } from './line-endings';
 import EDIT_DESCRIPTION from './edit.md';
@@ -73,6 +74,8 @@ export class EditTool implements BuiltinTool<EditInput> {
     return {
       accesses: ToolAccesses.readWriteFile(path),
       description: `Editing ${args.path}`,
+      display: { kind: 'file_io', operation: 'edit', path },
+      matchesRule: (ruleArgs) => matchesAnyRuleSubject(ruleArgs, [path, args.path]),
       execute: () => this.execution(args, path),
     };
   }

@@ -115,13 +115,14 @@ export interface RunnableToolExecution {
   readonly accesses?: ToolAccesses | undefined;
   readonly display?: ToolInputDisplay | undefined;
   readonly description?: string;
+  readonly matchesRule?: ((ruleArgs: string) => boolean) | undefined;
   readonly execute: (ctx: ExecutableToolContext) => Promise<ExecutableToolResult>;
 }
 
 export type ToolExecution = RunnableToolExecution | ExecutableToolErrorResult;
 
 export interface ExecutableTool<Input = unknown> extends Tool {
-  resolveExecution(input: Input): ToolExecution;
+  resolveExecution(input: Input): ToolExecution | Promise<ToolExecution>;
 }
 
 /**
@@ -140,6 +141,10 @@ export interface ToolExecutionHookContext extends LoopStepHookContext {
   readonly toolCall: ToolCall;
   readonly tool?: ExecutableTool | undefined;
   readonly args: unknown;
+}
+
+export interface ResolvedToolExecutionHookContext extends ToolExecutionHookContext {
+  readonly execution: RunnableToolExecution;
 }
 
 export interface PrepareToolExecutionResult {
@@ -181,6 +186,10 @@ export type PrepareToolExecutionHook = (
   ctx: ToolExecutionHookContext,
 ) => Promise<PrepareToolExecutionResult | undefined>;
 
+export type AuthorizeToolExecutionHook = (
+  ctx: ResolvedToolExecutionHookContext,
+) => Promise<PrepareToolExecutionResult | undefined>;
+
 export type FinalizeToolResultHook = (
   ctx: FinalizeToolResultContext,
 ) => Promise<ExecutableToolResult | undefined>;
@@ -203,6 +212,7 @@ export interface LoopHooks {
   beforeStep?: BeforeStepHook | undefined;
   afterStep?: AfterStepHook | undefined;
   prepareToolExecution?: PrepareToolExecutionHook | undefined;
+  authorizeToolExecution?: AuthorizeToolExecutionHook | undefined;
   finalizeToolResult?: FinalizeToolResultHook | undefined;
   shouldContinueAfterStop?: ShouldContinueAfterStopHook | undefined;
 }

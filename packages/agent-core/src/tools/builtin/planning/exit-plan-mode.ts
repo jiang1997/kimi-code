@@ -9,10 +9,12 @@
  */
 
 import type { Agent } from '#/agent';
+import type { PlanData } from '#/agent/plan';
 import { z } from 'zod';
 
 import type { BuiltinTool } from '../../../agent/tool';
 import type { ExecutableToolContext, ExecutableToolResult, ToolExecution } from '../../../loop/types';
+import type { ToolInputDisplay } from '../../display';
 import { toInputJsonSchema } from '../../support/input-schema';
 import DESCRIPTION from './exit-plan-mode.md';
 
@@ -86,11 +88,34 @@ export class ExitPlanModeTool implements BuiltinTool<ExitPlanModeInput> {
 
   constructor(private readonly agent: Agent) {}
 
-  resolveExecution(args: ExitPlanModeInput): ToolExecution {
+  async resolveExecution(args: ExitPlanModeInput): Promise<ToolExecution> {
     return {
       description: 'Presenting plan and exiting plan mode',
+      display: await this.resolvePlanReviewDisplay(args),
       execute: (ctx) => this.execution(args, ctx),
     };
+  }
+
+  private async resolvePlanReviewDisplay(
+    args: ExitPlanModeInput,
+  ): Promise<ToolInputDisplay | undefined> {
+    if (!this.agent.planMode.isActive) return undefined;
+    let data: PlanData;
+    try {
+      data = await this.agent.planMode.data();
+    } catch {
+      return undefined;
+    }
+    if (data === null || data.content.trim().length === 0) return undefined;
+    const display: ToolInputDisplay = {
+      kind: 'plan_review',
+      plan: data.content,
+      path: data.path,
+    };
+    if (args.options !== undefined && args.options.length >= 2) {
+      display.options = args.options;
+    }
+    return display;
   }
 
   private async execution(

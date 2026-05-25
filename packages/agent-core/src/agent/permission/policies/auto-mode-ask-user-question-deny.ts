@@ -1,8 +1,8 @@
 import type { Agent } from '../..';
 import type { PermissionPolicy, PermissionPolicyContext, PermissionPolicyResult } from '../policy';
 
-export class AskUserQuestionAutoPermissionPolicy implements PermissionPolicy {
-  readonly name = 'auto.ask-user-question';
+export class AutoModeAskUserQuestionDenyPermissionPolicy implements PermissionPolicy {
+  readonly name = 'auto-mode-ask-user-question-deny';
 
   constructor(private readonly agent: Agent) {}
 
@@ -10,9 +10,8 @@ export class AskUserQuestionAutoPermissionPolicy implements PermissionPolicy {
     if (this.agent.permission.mode !== 'auto') return undefined;
     if (context.toolCall.function.name !== 'AskUserQuestion') return undefined;
     return {
-      kind: 'result',
-      block: true,
-      reason:
+      kind: 'deny',
+      message:
         'AskUserQuestion is disabled while auto permission mode is active. Make a reasonable decision and continue without asking the user.',
     };
   }

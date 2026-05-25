@@ -15,7 +15,7 @@
 
 export interface ParsedPattern {
   readonly toolName: string;
-  readonly argPattern?: string | undefined;
+  readonly argPattern?: string;
 }
 
 /**
@@ -43,8 +43,5 @@ export function parsePattern(pattern: string): ParsedPattern {
   if (toolName.length === 0) {
     throw new Error(`permission pattern: empty tool name in "${pattern}"`);
   }
-  // Empty arg pattern (`Read()`) is treated as "toolName only" — it
-  // matches every call to that tool. This aligns with the intuition
-  // that writing `Read()` is an odd but non-fatal way of saying `Read`.
-  return { toolName, argPattern: argPattern.length > 0 ? argPattern : undefined };
+  return { toolName, argPattern };
 }

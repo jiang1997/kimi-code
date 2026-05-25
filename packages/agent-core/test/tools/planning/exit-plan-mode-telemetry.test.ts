@@ -6,7 +6,7 @@ import {
   type ApprovalResponse,
   type PermissionMode,
 } from '../../../src/agent/permission';
-import type { ToolExecutionHookContext } from '../../../src/loop';
+import type { PermissionPolicyContext } from '../../../src/agent/permission/policy';
 import {
   ExitPlanModeTool,
   type ExitPlanModeInput,
@@ -77,12 +77,20 @@ async function execute(agent: Agent, args: ExitPlanModeInput = {}) {
   });
 }
 
-function permissionContext(args: ExitPlanModeInput): ToolExecutionHookContext {
+function permissionContext(args: ExitPlanModeInput): PermissionPolicyContext {
+  const display: PermissionPolicyContext['execution']['display'] = {
+    kind: 'plan_review',
+    plan: '# Plan',
+    path: '/tmp/kimi-plan.md',
+  };
+  if (args.options !== undefined && args.options.length >= 2) {
+    display.options = args.options;
+  }
   return {
     turnId: '7',
     stepNumber: 1,
     signal: new AbortController().signal,
-    llm: {} as ToolExecutionHookContext['llm'],
+    llm: {} as PermissionPolicyContext['llm'],
     toolCall: {
       id: 'call_exit_plan',
       type: 'function',
@@ -92,6 +100,11 @@ function permissionContext(args: ExitPlanModeInput): ToolExecutionHookContext {
       },
     },
     args,
+    execution: {
+      description: 'Presenting plan and exiting plan mode',
+      display,
+      execute: async () => ({ output: '' }),
+    },
   };
 }
 

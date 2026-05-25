@@ -1,125 +1,95 @@
-/**
- * matchesRule — pure function that decides whether a PermissionRule
- * applies to a given tool call.
- *
- * Contract:
- *   - No side effects, no `this`, no IO, no exceptions.
- *   - Deterministic: same `(rule, toolName, args)` → same result.
- *   - Returns boolean only; decision semantics (deny/ask/allow) are a
- *     caller concern (see `check-rules.ts`).
- */
-
 import picomatch from 'picomatch';
 
+import type { RunnableToolExecution } from '../../loop/types';
+import { matchesRuleSubject } from '../../tools/support/rule-match';
 import { parsePattern } from './parse-pattern';
-import { globMatch, pathGlobMatch, type PermissionPathMatchOptions } from './path-glob-match';
+import { stableSerialize } from './stable-args';
 import type { PermissionRule } from './types';
 
-type ArgFieldKind = 'generic' | 'path';
-
-interface ArgField {
-  readonly value: string;
-  readonly kind: ArgFieldKind;
+export interface PermissionRuleMatchExecution {
+  readonly matchesRule?: RunnableToolExecution['matchesRule'];
+  readonly cwd?: unknown;
+  readonly pathClass?: unknown;
 }
 
-/**
- * Tool-specific argument field convention. When a rule uses an arg
- * pattern (`Read(./src/**)`), we extract the listed field from the tool
- * call args and match the glob against its value.
- *
- * Unknown tools fall back to `undefined`, which means "arg pattern
- * cannot match" — rules with an arg pattern on an unknown tool will
- * never fire. Rules without an arg pattern (`UnknownTool`) still match
- * on name alone.
- */
-function extractArgField(toolName: string, args: unknown): ArgField | undefined {
-  if (args === null || typeof args !== 'object') return undefined;
-  const rec = args as Record<string, unknown>;
+export type PermissionRuleMatchStrategy =
+  | 'tool_name_only'
+  | 'matches_rule'
+  | 'stable_args_fallback'
+  | 'single_field_fallback';
 
-  switch (toolName) {
-    case 'Bash':
-    case 'Shell':
-    case 'Background':
-      return typeof rec['command'] === 'string'
-        ? { value: rec['command'], kind: 'generic' }
-        : undefined;
-    case 'Read':
-    case 'Write':
-    case 'Edit':
-    case 'ReadMediaFile':
-      return typeof rec['path'] === 'string' ? { value: rec['path'], kind: 'path' } : undefined;
-    case 'Grep':
-    case 'Glob':
-      return typeof rec['pattern'] === 'string'
-        ? { value: rec['pattern'], kind: 'generic' }
-        : undefined;
-    case 'Task':
-    case 'Agent':
-      return typeof rec['subagent_type'] === 'string'
-        ? { value: rec['subagent_type'], kind: 'generic' }
-        : undefined;
-    default:
-      return undefined;
-  }
+export interface PermissionRuleMatch {
+  readonly rule: PermissionRule;
+  readonly strategy: PermissionRuleMatchStrategy;
+  readonly hasRuleArgs: boolean;
 }
 
-/**
- * Decide whether a single rule matches a specific tool call.
- *
- * Algorithm:
- *   1. Parse `rule.pattern` into `{toolName, argPattern?}`.
- *   2. If parsed toolName is `*`, skip name check; otherwise compare with
- *      glob semantics so `mcp__github__*` matches `mcp__github__list`.
- *   3. If the rule has no argPattern, name match → rule fires.
- *   4. Otherwise extract the tool-specific field value and match against
- *      the glob. Handle the leading `!` negation prefix by flipping the
- *      final boolean.
- */
-export function matchesRule(
-  rule: PermissionRule,
-  toolName: string,
-  args: unknown,
-  pathOptions?: PermissionPathMatchOptions,
-): boolean {
+export interface PermissionRuleMatchInput {
+  readonly rule: PermissionRule;
+  readonly toolName: string;
+  readonly args: unknown;
+  readonly execution: PermissionRuleMatchExecution;
+}
+
+export function matchPermissionRule({
+  rule,
+  toolName,
+  args,
+  execution,
+}: PermissionRuleMatchInput): PermissionRuleMatch | undefined {
   let parsed;
   try {
     parsed = parsePattern(rule.pattern);
   } catch {
-    // Malformed patterns never match. The loader is responsible for
-    // surfacing DSL errors at load time; matcher stays total.
-    return false;
+    return undefined;
   }
 
-  // 1. Tool-name match (support `*` wildcard + glob-style tool names)
-  const nameGlob = parsed.toolName;
-  if (nameGlob !== '*' && !picomatch.isMatch(toolName, nameGlob)) return false;
-
-  // 2. No arg pattern → name match is enough
-  if (parsed.argPattern === undefined) return true;
-
-  // 3. Arg pattern — resolve negation and glob-match the field
-  const rawPattern = parsed.argPattern;
-  const negated = rawPattern.startsWith('!');
-  const positivePattern = negated ? rawPattern.slice(1) : rawPattern;
-
-  const fieldValue = extractArgField(toolName, args);
-  if (fieldValue === undefined) {
-    // No extractable field → positive pattern cannot match; negation
-    // semantics here mean "the field is not in the disallowed set",
-    // which by missing-field convention we treat as a non-match to
-    // avoid accidentally firing deny rules on malformed args.
-    return false;
+  if (parsed.toolName !== '*' && !picomatch.isMatch(toolName, parsed.toolName)) {
+    return undefined;
   }
 
-  // If the field is a path, use `pathGlobMatch` which handles normalization.
-  const hit =
-    fieldValue.kind === 'path'
-      ? pathGlobMatch(fieldValue.value, positivePattern, {
-          pathOptions,
-          conservativeCaseFold: rule.decision === 'deny' && !negated,
-        })
-      : globMatch(fieldValue.value, positivePattern);
-  return negated ? !hit : hit;
+  if (parsed.argPattern === undefined) {
+    return { rule, strategy: 'tool_name_only', hasRuleArgs: false };
+  }
+
+  if (execution.matchesRule !== undefined) {
+    return execution.matchesRule(parsed.argPattern)
+      ? { rule, strategy: 'matches_rule', hasRuleArgs: true }
+      : undefined;
+  }
+
+  if (matchesRuleSubject(parsed.argPattern, stableSerialize(args))) {
+    return { rule, strategy: 'stable_args_fallback', hasRuleArgs: true };
+  }
+
+  const singleField = singleActualFieldValue(args);
+  if (
+    singleField !== undefined &&
+    matchesRuleSubject(parsed.argPattern, singleFieldSubject(singleField))
+  ) {
+    return { rule, strategy: 'single_field_fallback', hasRuleArgs: true };
+  }
+
+  return undefined;
 }
 
-export type { PermissionPathMatchOptions } from './path-glob-match';
+export function matchesRule(
+  rule: PermissionRule,
+  toolName: string,
+  args: unknown,
+  execution: PermissionRuleMatchExecution = {},
+): boolean {
+  return matchPermissionRule({ rule, toolName, args, execution }) !== undefined;
+}
+
+function singleActualFieldValue(args: unknown): unknown {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return undefined;
+  const entries = Object.entries(args as Record<string, unknown>).filter(
+    ([, value]) => typeof value !== 'undefined',
+  );
+  return entries.length === 1 ? entries[0]![1] : undefined;
+}
+
+function singleFieldSubject(value: unknown): string {
+  return typeof value === 'string' ? value : stableSerialize(value);
+}

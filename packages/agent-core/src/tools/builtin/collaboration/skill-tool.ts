@@ -22,6 +22,7 @@ import type { ExecutableToolResult, ToolExecution } from '../../../loop/types';
 import { isInlineSkillType, type SkillDefinition } from '../../../skill';
 import { renderPrompt } from '../../../utils/render-prompt';
 import { toInputJsonSchema } from '../../support/input-schema';
+import { matchesRuleSubject } from '../../support/rule-match';
 import skillDescriptionTemplate from './skill-tool.md';
 
 export const MAX_SKILL_QUERY_DEPTH = 3;
@@ -78,6 +79,8 @@ export class SkillTool implements BuiltinTool<SkillToolInput> {
   resolveExecution(args: SkillToolInput): ToolExecution {
     return {
       description: `Invoke skill ${args.skill}`,
+      display: { kind: 'skill_call', skill_name: args.skill, args: args.args },
+      matchesRule: (ruleArgs) => matchesRuleSubject(ruleArgs, args.skill),
       execute: () => this.execution(args),
     };
   }

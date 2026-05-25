@@ -1,0 +1,128 @@
+import * as posixPath from 'node:path/posix';
+import * as win32Path from 'node:path/win32';
+
+import type { Agent } from '../..';
+import type { ToolResourceAccess } from '../../../loop/tool-access';
+import { isWithinDirectory, type PathClass } from '../../../tools/policies/path-access';
+import { isSensitiveFile } from '../../../tools/policies/sensitive';
+import {
+  findGitWorkTreeMarker,
+  type GitWorkTreeMarker,
+} from '../../../tools/support/git-worktree';
+import type { PermissionPolicy, PermissionPolicyContext, PermissionPolicyResult } from '../policy';
+
+export class SensitiveFileAccessAskPermissionPolicy implements PermissionPolicy {
+  readonly name = 'sensitive-file-access-ask';
+
+  constructor(private readonly agent: Agent) {}
+
+  evaluate(context: PermissionPolicyContext): PermissionPolicyResult | undefined {
+    const pathClass = this.agent.runtime.kaos.pathClass();
+    const access = firstFileAccess(context, (fileAccess) =>
+      fileAccess.path === undefined ? false : isSensitiveFile(fileAccess.path, pathClass),
+    );
+    if (access === undefined) return undefined;
+    return {
+      kind: 'ask',
+      reason: fileAccessReason(access, { sensitive_path: true }),
+    };
+  }
+}
+
+export class GitControlPathAccessAskPermissionPolicy implements PermissionPolicy {
+  private readonly gitMarkerCache = new Map<string, GitWorkTreeMarker>();
+  readonly name = 'git-control-path-access-ask';
+
+  constructor(private readonly agent: Agent) {}
+
+  async evaluate(context: PermissionPolicyContext): Promise<PermissionPolicyResult | undefined> {
+    const cwd = this.agent.config.cwd;
+    if (cwd.length === 0) return undefined;
+    const pathClass = this.agent.runtime.kaos.pathClass();
+    const marker = await this.findGitMarker(cwd);
+    const access = firstFileAccess(context, (fileAccess) => {
+      if (fileAccess.path === undefined) return false;
+      return isGitControlPath(fileAccess.path, cwd, marker, pathClass);
+    });
+    if (access === undefined) return undefined;
+    return {
+      kind: 'ask',
+      reason: fileAccessReason(access, { git_control_path: true }),
+    };
+  }
+
+  private async findGitMarker(cwd: string): Promise<GitWorkTreeMarker | null> {
+    const cached = this.gitMarkerCache.get(cwd);
+    if (cached !== undefined) return cached;
+    const marker = await findGitWorkTreeMarker(this.agent.runtime.kaos, cwd);
+    if (marker !== null) this.gitMarkerCache.set(cwd, marker);
+    return marker;
+  }
+}
+
+export class CwdOutsideFileAccessAskPermissionPolicy implements PermissionPolicy {
+  readonly name = 'cwd-outside-file-access-ask';
+
+  constructor(private readonly agent: Agent) {}
+
+  evaluate(context: PermissionPolicyContext): PermissionPolicyResult | undefined {
+    const cwd = this.agent.config.cwd;
+    if (cwd.length === 0) return undefined;
+    const pathClass = this.agent.runtime.kaos.pathClass();
+    const access = firstFileAccess(context, (fileAccess) => {
+      if (fileAccess.path === undefined) return false;
+      return !isWithinDirectory(fileAccess.path, cwd, pathClass);
+    });
+    if (access === undefined) return undefined;
+    return {
+      kind: 'ask',
+      reason: fileAccessReason(access, { cwd_outside: true }),
+    };
+  }
+}
+
+type FileAccess = Extract<ToolResourceAccess, { kind: 'file' }>;
+
+function firstFileAccess(
+  context: PermissionPolicyContext,
+  predicate: (access: FileAccess) => boolean,
+): FileAccess | undefined {
+  return context.execution.accesses?.find(
+    (access): access is FileAccess => access.kind === 'file' && predicate(access),
+  );
+}
+
+function fileAccessReason(access: FileAccess, extra: Record<string, boolean>) {
+  return {
+    file_access_operation: access.operation,
+    recursive: access.recursive === true,
+    ...extra,
+  };
+}
+
+function isGitControlPath(
+  targetPath: string,
+  cwd: string,
+  marker: GitWorkTreeMarker | null,
+  pathClass: PathClass,
+): boolean {
+  if (relativePathParts(targetPath, cwd, pathClass).some((part) => part.toLowerCase() === '.git')) {
+    return true;
+  }
+  return (
+    marker !== null &&
+    (isWithinDirectory(targetPath, marker.dotGitPath, pathClass) ||
+      isWithinDirectory(targetPath, marker.controlDirPath, pathClass))
+  );
+}
+
+function relativePathParts(targetPath: string, cwd: string, pathClass: PathClass): string[] {
+  return pathMod(pathClass)
+    .relative(cwd, targetPath)
+    .split(/[\\/]+/)
+    .filter((part) => part.length > 0);
+}
+
+function pathMod(pathClass: PathClass): typeof posixPath {
+  return pathClass === 'win32' ? win32Path : posixPath;
+}

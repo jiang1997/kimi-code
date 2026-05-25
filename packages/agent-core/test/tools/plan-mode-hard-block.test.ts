@@ -2,10 +2,14 @@ import type { ToolCall } from '@moonshot-ai/kosong';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Agent } from '../../src/agent';
-import { PlanModeGuardPermissionPolicy } from '../../src/agent/permission/policies/plan';
+import { PlanModeGuardDenyPermissionPolicy } from '../../src/agent/permission/policies/plan-mode-guard-deny';
 import type { PermissionMode } from '../../src/agent/permission/types';
-import type { PermissionPolicyContext } from '../../src/agent/permission/policy';
+import type {
+  PermissionPolicyContext,
+  PermissionPolicyResult,
+} from '../../src/agent/permission/policy';
 import { PlanMode } from '../../src/agent/plan';
+import { ToolAccesses } from '../../src/loop';
 import type { ToolExecutionHookContext } from '../../src/loop';
 
 const signal = new AbortController().signal;
@@ -53,7 +57,10 @@ function policyContext(
 ): PermissionPolicyContext {
   return {
     ...hookContext(toolName, args),
-    matchedRule: undefined,
+    execution: {
+      accesses: toolAccesses(toolName, args),
+      execute: async () => ({ output: '' }),
+    },
   };
 }
 
@@ -63,7 +70,7 @@ function evaluatePlanPolicy(
   args: unknown,
   mode: PermissionMode = 'manual',
 ) {
-  return new PlanModeGuardPermissionPolicy(agent).evaluate(policyContext(toolName, args, mode));
+  return new PlanModeGuardDenyPermissionPolicy(agent).evaluate(policyContext(toolName, args, mode));
 }
 
 describe('Plan mode permission policy', () => {
@@ -72,9 +79,7 @@ describe('Plan mode permission policy', () => {
     const planPath = planMode.planFilePath;
     if (planPath === null) throw new Error('expected plan path');
 
-    expect(
-      await evaluatePlanPolicy(agent, 'Write', { path: planPath }),
-    ).toEqual({ kind: 'allow' });
+    expect(await evaluatePlanPolicy(agent, 'Write', { path: planPath })).toBeUndefined();
     expect(
       await evaluatePlanPolicy(
         agent,
@@ -85,7 +90,7 @@ describe('Plan mode permission policy', () => {
           new_string: 'B',
         },
       ),
-    ).toEqual({ kind: 'allow' });
+    ).toBeUndefined();
   });
 
   it('blocks Write and Edit to non-plan files before permission approval', async () => {
@@ -101,11 +106,11 @@ describe('Plan mode permission policy', () => {
       new_string: 'B',
     });
 
-    expect(write).toMatchObject({ kind: 'result', block: true });
-    expect(write?.kind === 'result' ? write.reason : '').toContain('current plan file');
-    expect(write?.kind === 'result' ? write.reason : '').toContain('ExitPlanMode');
-    expect(edit).toMatchObject({ kind: 'result', block: true });
-    expect(edit?.kind === 'result' ? edit.reason : '').toContain('current plan file');
+    const writeDeny = expectDeny(write);
+    expect(writeDeny.message ?? '').toContain('current plan file');
+    expect(writeDeny.message ?? '').toContain('ExitPlanMode');
+    const editDeny = expectDeny(edit);
+    expect(editDeny.message ?? '').toContain('current plan file');
   });
 
   it('blocks file edits when plan mode has no selected plan file path', async () => {
@@ -118,11 +123,9 @@ describe('Plan mode permission policy', () => {
       new_string: 'B',
     });
 
-    expect(result).toMatchObject({ kind: 'result', block: true });
-    expect(result?.kind === 'result' ? result.reason : '').toContain(
-      '(no plan file selected yet)',
-    );
-    expect(result?.kind === 'result' ? result.reason : '').toContain('ExitPlanMode');
+    const deny = expectDeny(result);
+    expect(deny.message ?? '').toContain('(no plan file selected yet)');
+    expect(deny.message ?? '').toContain('ExitPlanMode');
   });
 
   it.each(['manual', 'yolo', 'auto'] as const)(
@@ -151,9 +154,9 @@ describe('Plan mode permission policy', () => {
         mode,
       );
 
-      expect(result).toMatchObject({ kind: 'result', block: true });
-      expect(result?.kind === 'result' ? result.reason : '').toContain('plan mode');
-      expect(result?.kind === 'result' ? result.reason : '').toContain('ExitPlanMode');
+      const deny = expectDeny(result);
+      expect(deny.message ?? '').toContain('plan mode');
+      expect(deny.message ?? '').toContain('ExitPlanMode');
     },
   );
 
@@ -172,3 +175,19 @@ describe('Plan mode permission policy', () => {
     ).toBeUndefined();
   });
 });
+
+function toolAccesses(toolName: string, args: unknown) {
+  const path = args !== null && typeof args === 'object' ? (args as { path?: unknown }).path : undefined;
+  if (typeof path !== 'string') return ToolAccesses.none();
+  if (toolName === 'Write') return ToolAccesses.writeFile(path);
+  if (toolName === 'Edit') return ToolAccesses.readWriteFile(path);
+  return ToolAccesses.none();
+}
+
+function expectDeny(
+  result: PermissionPolicyResult | undefined,
+): Extract<PermissionPolicyResult, { kind: 'deny' }> {
+  expect(result).toMatchObject({ kind: 'deny' });
+  if (result?.kind !== 'deny') throw new Error('expected deny result');
+  return result;
+}

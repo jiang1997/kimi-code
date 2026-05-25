@@ -1,33 +1,45 @@
 import type { Agent } from '../..';
 import type { PermissionPolicy } from '../policy';
-import { AskUserQuestionAutoPermissionPolicy } from './ask-user-question';
-import { CwdOutsideAskPermissionPolicy } from './cwd-outside-ask';
-import { DefaultAutoAllowPermissionPolicy } from './default-auto-allow';
-import { DefaultGitCwdWritePermissionPolicy } from './default-git-cwd-write';
+import { AutoModeApprovePermissionPolicy } from './auto-mode-approve';
+import { AutoModeAskUserQuestionDenyPermissionPolicy } from './auto-mode-ask-user-question-deny';
+import { DefaultToolApprovePermissionPolicy } from './default-tool-approve';
+import { ExitPlanModeReviewAskPermissionPolicy } from './exit-plan-mode-review-ask';
 import { FallbackAskPermissionPolicy } from './fallback-ask';
-import { PermissionModeApprovePolicy } from './permission-mode-approve';
 import {
-  EnterPlanModePermissionPolicy,
-  ExitPlanModePermissionPolicy,
-  PlanModeGuardPermissionPolicy,
-} from './plan';
+  CwdOutsideFileAccessAskPermissionPolicy,
+  GitControlPathAccessAskPermissionPolicy,
+  SensitiveFileAccessAskPermissionPolicy,
+} from './file-access-ask';
+import { GitCwdWriteApprovePermissionPolicy } from './git-cwd-write-approve';
+import { PlanModeGuardDenyPermissionPolicy } from './plan-mode-guard-deny';
+import { PlanModeToolApprovePermissionPolicy } from './plan-mode-tool-approve';
+import { PreToolCallHookPermissionPolicy } from './pre-tool-call-hook';
 import { SessionApprovalHistoryPermissionPolicy } from './session-approval-history';
-import { SystemSafetyPathAskPermissionPolicy } from './system-safety-path-ask';
-import { UserConfiguredPermissionRulesPolicy } from './user-configured-rules';
+import {
+  UserConfiguredAllowPermissionPolicy,
+  UserConfiguredAskPermissionPolicy,
+  UserConfiguredDenyPermissionPolicy,
+} from './user-configured-rules';
+import { YoloModeApprovePermissionPolicy } from './yolo-mode-approve';
 
 export function createPermissionDecisionPolicies(agent: Agent): readonly PermissionPolicy[] {
   return [
-    new UserConfiguredPermissionRulesPolicy(agent),
-    new AskUserQuestionAutoPermissionPolicy(agent),
-    new PlanModeGuardPermissionPolicy(agent),
-    new SystemSafetyPathAskPermissionPolicy(agent),
+    new PreToolCallHookPermissionPolicy(agent),
+    new AutoModeAskUserQuestionDenyPermissionPolicy(agent),
+    new PlanModeGuardDenyPermissionPolicy(agent),
+    new UserConfiguredDenyPermissionPolicy(agent),
+    new AutoModeApprovePermissionPolicy(agent),
+    new UserConfiguredAllowPermissionPolicy(agent),
     new SessionApprovalHistoryPermissionPolicy(agent),
-    new CwdOutsideAskPermissionPolicy(agent),
-    new ExitPlanModePermissionPolicy(agent),
-    new PermissionModeApprovePolicy(agent),
-    new EnterPlanModePermissionPolicy(),
-    new DefaultAutoAllowPermissionPolicy(),
-    new DefaultGitCwdWritePermissionPolicy(agent),
+    new UserConfiguredAskPermissionPolicy(agent),
+    new SensitiveFileAccessAskPermissionPolicy(agent),
+    new GitControlPathAccessAskPermissionPolicy(agent),
+    new CwdOutsideFileAccessAskPermissionPolicy(agent),
+    new ExitPlanModeReviewAskPermissionPolicy(agent),
+    new YoloModeApprovePermissionPolicy(agent),
+    new DefaultToolApprovePermissionPolicy(),
+    new GitCwdWriteApprovePermissionPolicy(agent),
+    new PlanModeToolApprovePermissionPolicy(),
     new FallbackAskPermissionPolicy(),
   ];
 }

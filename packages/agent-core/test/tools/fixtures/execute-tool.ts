@@ -1,18 +1,23 @@
-import type { ExecutableTool, ExecutableToolContext, ToolExecution } from '../../../src/loop';
+import type {
+  ExecutableTool,
+  ExecutableToolContext,
+  ExecutableToolResult,
+  ToolExecution,
+} from '../../../src/loop';
 import { PathSecurityError } from '../../../src/tools/policies/path-access';
 
 export type TestExecutableToolContext<Input> = ExecutableToolContext & {
   readonly args: Input;
 };
 
-export function executeTool<Input>(
+export async function executeTool<Input>(
   tool: ExecutableTool<Input>,
   context: TestExecutableToolContext<Input>,
-) {
+): Promise<ExecutableToolResult> {
   const { args, ...executionContext } = context;
   let execution: ToolExecution;
   try {
-    execution = tool.resolveExecution(args);
+    execution = await tool.resolveExecution(args);
   } catch (error) {
     const output =
       error instanceof PathSecurityError

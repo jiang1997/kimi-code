@@ -10,19 +10,12 @@ import {
   type PermissionMode,
   type PermissionRule,
 } from '../../src/agent/permission';
-import {
-  actionToRulePattern,
-  describeApprovalAction,
-} from '../../src/agent/permission/action-label';
-import { checkMatchingRules } from '../../src/agent/permission/check-rules';
 import { matchesRule } from '../../src/agent/permission/matches-rule';
 import { parsePattern } from '../../src/agent/permission/parse-pattern';
-import { createPlanPermissionPolicies } from '../../src/agent/permission/policies/plan';
-import type {
-  PermissionPolicy,
-  PermissionPolicyResult,
-} from '../../src/agent/permission/policy';
-import type { ToolExecutionHookContext } from '../../src/loop';
+import { createPermissionDecisionPolicies } from '../../src/agent/permission/policies';
+import type { PermissionPolicyContext } from '../../src/agent/permission/policy';
+import { stableToolArgsKey } from '../../src/agent/permission/stable-args';
+import { ToolAccesses } from '../../src/loop';
 import type { ToolInputDisplay } from '../../src/tools/display';
 import { createFakeKaos } from '../tools/fixtures/fake-kaos';
 import { createCommandKaos, testAgent } from './harness/agent';
@@ -388,19 +381,46 @@ describe('Permission auto mode', () => {
     },
   );
 
-  it.each([
-    ['Read', { path: '/tmp/notes.md' }, 'read'],
-    ['ReadMediaFile', { path: '/tmp/image.png' }, 'read'],
-    ['Write', { path: '/tmp/notes.md', content: 'x' }, 'write'],
-    ['Edit', { path: '/tmp/notes.md', old_string: 'a', new_string: 'b' }, 'edit'],
-    ['Grep', { pattern: 'TODO', path: '/tmp' }, 'grep'],
-  ] as const)(
-    'requests approval for %s outside the workspace in yolo mode',
-    async (toolName, args, operation) => {
+  it.each(
+    (['manual', 'yolo', 'auto'] as const).flatMap((mode) =>
+      [
+        [
+          mode,
+          'Read',
+          { path: '/tmp/notes.md' },
+          'read',
+          'read file outside of working directory',
+        ],
+        [
+          mode,
+          'ReadMediaFile',
+          { path: '/tmp/image.png' },
+          'read',
+          'read media file outside of working directory',
+        ],
+        [
+          mode,
+          'Write',
+          { path: '/tmp/notes.md', content: 'x' },
+          'write',
+          'write file outside of working directory',
+        ],
+        [
+          mode,
+          'Edit',
+          { path: '/tmp/notes.md', old_string: 'a', new_string: 'b' },
+          'edit',
+          'edit file outside of working directory',
+        ],
+      ] as const,
+    ),
+  )(
+    'requests approval in %s mode for %s outside the cwd',
+    async (mode, toolName, args, operation, action) => {
       const { manager, requestApproval } = makePermissionManager(async () => ({
         decision: 'approved',
       }));
-      manager.setMode('yolo');
+      manager.setMode(mode);
 
       await expect(
         manager.beforeToolCall(hookContext({ id: `call_${toolName}`, toolName, args })),
@@ -409,11 +429,12 @@ describe('Permission auto mode', () => {
       expect(requestApproval).toHaveBeenCalledWith(
         expect.objectContaining({
           toolName,
+          action,
           display: {
             kind: 'file_io',
             operation,
             path: args.path,
-            detail: 'Outside workspace: /workspace',
+            detail: 'Path is outside the current working directory.',
           },
         }),
         expect.any(Object),
@@ -443,8 +464,8 @@ describe('Permission auto mode', () => {
     },
   );
 
-  it.each(['manual', 'auto'] as const)(
-    'does not apply the outside-workspace yolo policy in %s mode',
+  it.each(['manual', 'yolo', 'auto'] as const)(
+    'does not classify Grep path as an outside-cwd boundary in %s mode',
     async (mode) => {
       const { manager, requestApproval } = makePermissionManager(async () => ({
         decision: 'approved',
@@ -454,9 +475,9 @@ describe('Permission auto mode', () => {
       await expect(
         manager.beforeToolCall(
           hookContext({
-            id: `call_read_${mode}`,
-            toolName: 'Read',
-            args: { path: '/tmp/notes.md' },
+            id: `call_grep_${mode}`,
+            toolName: 'Grep',
+            args: { pattern: 'TODO', path: '/tmp' },
           }),
         ),
       ).resolves.toBeUndefined();
@@ -512,74 +533,36 @@ describe('Permission auto mode', () => {
     await expect(call()).resolves.toBeUndefined();
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
-    expect(manager.data().rules).toContainEqual({
-      decision: 'allow',
-      scope: 'session-runtime',
-      pattern: 'Read',
-      reason: 'approve_for_session: read file',
-    });
+    expect(manager.hasSessionApprovedKey(stableToolArgsKey('Read', { path: '/tmp/notes.md' }))).toBe(
+      true,
+    );
+    expect(manager.data().rules).toEqual([]);
   });
 });
 
 describe('Permission policy chain', () => {
-  it('keeps plan-specific policies under the permission module plan namespace', () => {
-    expect(createPlanPermissionPolicies({} as Agent).map((policy) => policy.name)).toEqual([
-      'plan.enter-plan-mode',
-      'plan.exit-plan-mode',
-      'plan.mode-guard',
+  it('keeps built-in policies in document order', () => {
+    expect(createPermissionDecisionPolicies({} as Agent).map((policy) => policy.name)).toEqual([
+      'pre-tool-call-hook',
+      'auto-mode-ask-user-question-deny',
+      'plan-mode-guard-deny',
+      'user-configured-deny',
+      'auto-mode-approve',
+      'user-configured-allow',
+      'session-approval-history',
+      'user-configured-ask',
+      'sensitive-file-access-ask',
+      'git-control-path-access-ask',
+      'cwd-outside-file-access-ask',
+      'exit-plan-mode-review-ask',
+      'yolo-mode-approve',
+      'default-tool-approve',
+      'git-cwd-write-approve',
+      'plan-mode-tool-approve',
+      'fallback-ask',
     ]);
   });
 
-  it('runs custom policies after deny rules and before generic approval', async () => {
-    const policy: PermissionPolicy = {
-      name: 'test.block-bash',
-      evaluate: vi.fn(async (): Promise<PermissionPolicyResult> => ({
-        kind: 'result',
-        block: true,
-        reason: 'blocked by custom policy',
-      })),
-    };
-    const { manager, requestApproval } = makePermissionManager(
-      async () => ({ decision: 'approved' }),
-      { policies: [policy] },
-    );
-
-    await expect(manager.beforeToolCall(hookContext({ id: 'call_policy' }))).resolves.toEqual({
-      block: true,
-      reason: 'blocked by custom policy',
-    });
-    expect(policy.evaluate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolCall: expect.objectContaining({ id: 'call_policy' }),
-        matchedRule: undefined,
-      }),
-    );
-    expect(requestApproval).not.toHaveBeenCalled();
-  });
-
-  it('keeps explicit deny rules higher priority than custom policies', async () => {
-    const policy: PermissionPolicy = {
-      name: 'test.allow-bash',
-      evaluate: vi.fn(async (): Promise<PermissionPolicyResult> => ({ kind: 'allow' })),
-    };
-    const { manager, requestApproval } = makePermissionManager(
-      async () => ({ decision: 'approved' }),
-      { policies: [policy] },
-    );
-    manager.rules.push({
-      decision: 'deny',
-      scope: 'user',
-      pattern: 'Bash',
-      reason: 'blocked before policy',
-    });
-
-    await expect(manager.beforeToolCall(hookContext({ id: 'call_deny' }))).resolves.toMatchObject({
-      block: true,
-      reason: 'Tool "Bash" was denied by permission rule. Reason: blocked before policy',
-    });
-    expect(policy.evaluate).not.toHaveBeenCalled();
-    expect(requestApproval).not.toHaveBeenCalled();
-  });
 });
 
 describe('Permission live derive', () => {
@@ -599,7 +582,7 @@ describe('Permission live derive', () => {
     expect(child.manager.mode).toBe('manual');
   });
 
-  it('uses child matching rules before parent rules', async () => {
+  it('applies rule decision priority across child and parent rules', async () => {
     const parent = makePermissionManager(async () => ({ decision: 'approved' }));
     parent.manager.rules.push({
       decision: 'deny',
@@ -617,8 +600,11 @@ describe('Permission live derive', () => {
       reason: 'child allow',
     });
 
-    await expect(child.manager.beforeToolCall(hookContext({ id: 'call_allow' }))).resolves
-      .toBeUndefined();
+    await expect(child.manager.beforeToolCall(hookContext({ id: 'call_parent_deny' }))).resolves
+      .toMatchObject({
+        block: true,
+        reason: 'Tool "Bash" was denied by permission rule. Reason: parent deny',
+      });
     expect(child.requestApproval).not.toHaveBeenCalled();
 
     const parentAllow = makePermissionManager(async () => ({ decision: 'approved' }));
@@ -1175,11 +1161,11 @@ describe('Default git CWD Write/Edit permission', () => {
     });
   }
 
-  function writeHook(args: Record<string, unknown>, id = 'call_write'): ToolExecutionHookContext {
+  function writeHook(args: Record<string, unknown>, id = 'call_write'): PermissionPolicyContext {
     return hookContext({ id, toolName: 'Write', args });
   }
 
-  function editHook(args: Record<string, unknown>, id = 'call_edit'): ToolExecutionHookContext {
+  function editHook(args: Record<string, unknown>, id = 'call_edit'): PermissionPolicyContext {
     return hookContext({ id, toolName: 'Edit', args });
   }
 
@@ -1665,18 +1651,6 @@ describe('Permission rule helpers', () => {
     ).toBe(false);
   });
 
-  it('matches path rules against relative tool paths using the active cwd', () => {
-    expect(
-      checkMatchingRules(
-        [permissionRule('Read(/workspace/project/secret.txt)', 'deny')],
-        'Read',
-        { path: './secret.txt' },
-        'manual',
-        { cwd: '/workspace/project', pathClass: 'posix' },
-      ),
-    ).toMatchObject({ decision: 'deny' });
-  });
-
   it('matches win32 path rules across separators, dot segments, and case variants', () => {
     const secret = 'C:\\workspace\\project\\secret.txt';
     const denyRule = permissionRule(`Read(${secret})`, 'deny');
@@ -1705,85 +1679,6 @@ describe('Permission rule helpers', () => {
     ).toBe(true);
   });
 
-  it('matches win32 path rules against relative tool paths using the active cwd', () => {
-    expect(
-      checkMatchingRules(
-        [permissionRule('Read(C:\\workspace\\project\\secret.txt)', 'deny')],
-        'Read',
-        { path: '.\\SECRET.txt' },
-        'manual',
-        { cwd: 'C:\\workspace\\project', pathClass: 'win32' },
-      ),
-    ).toMatchObject({ decision: 'deny' });
-  });
-
-  it('applies explicit rule priority and mode overlay in order', () => {
-    expect(checkMatchingRules([], 'Write', { path: '/tmp/a' }, 'manual')).toBeUndefined();
-    expect(
-      checkMatchingRules(
-        [permissionRule('Write', 'allow')],
-        'Write',
-        { path: '/tmp/a' },
-        'manual',
-      ),
-    ).toMatchObject({
-      decision: 'allow',
-    });
-    expect(
-      checkMatchingRules(
-        [permissionRule('Write', 'allow'), permissionRule('Write', 'ask')],
-        'Write',
-        {},
-        'manual',
-      ),
-    ).toMatchObject({ decision: 'ask' });
-    expect(
-      checkMatchingRules(
-        [permissionRule('Write', 'allow'), permissionRule('Write', 'deny')],
-        'Write',
-        {},
-        'manual',
-      ),
-    ).toMatchObject({ decision: 'deny' });
-    expect(
-      checkMatchingRules([permissionRule('Write', 'ask')], 'Write', { path: '/tmp/a' }, 'yolo'),
-    ).toMatchObject({
-      decision: 'allow',
-    });
-    expect(
-      checkMatchingRules([permissionRule('Write', 'deny')], 'Write', { path: '/tmp/a' }, 'yolo'),
-    ).toMatchObject({
-      decision: 'deny',
-    });
-  });
-
-  it('derives approval action labels from display semantics and MCP names', () => {
-    expect(describeApprovalAction('Bash', {}, { kind: 'command', command: 'git status' })).toBe(
-      'run command',
-    );
-    expect(
-      describeApprovalAction('Write', {}, { kind: 'file_io', operation: 'write', path: 'x' }),
-    ).toBe('write file');
-    expect(
-      describeApprovalAction('ExitPlanMode', {}, { kind: 'plan_review', plan: '# Plan' }),
-    ).toBe('review plan');
-    expect(
-      describeApprovalAction(
-        'Agent',
-        {},
-        { kind: 'agent_call', agent_name: 'review', prompt: 'x' },
-      ),
-    ).toBe('spawn agent');
-    expect(describeApprovalAction('Skill', {}, { kind: 'skill_call', skill_name: 'commit' })).toBe(
-      'invoke skill',
-    );
-    expect(describeApprovalAction('mcp__files__get_files', {}, genericDisplay())).toBe(
-      'call MCP tool: files:get_files',
-    );
-    expect(actionToRulePattern('edit file outside of working directory', 'Edit')).toBe('Write');
-    expect(actionToRulePattern('run command in plan mode', 'Bash')).toBeUndefined();
-    expect(actionToRulePattern('call CustomTool', 'CustomTool')).toBe('CustomTool');
-  });
 });
 
 function bashCall(): ToolCall {
@@ -1800,7 +1695,6 @@ function bashCall(): ToolCall {
 function makePermissionManager(
   handleApproval: (request: unknown) => Promise<ApprovalResponse>,
   options: {
-    readonly policies?: readonly PermissionPolicy[];
     readonly parent?: PermissionManager | undefined;
     readonly planModeActive?: boolean;
     readonly kaos?: Kaos;
@@ -1897,7 +1791,7 @@ function hookContext(input: {
   readonly id: string;
   readonly toolName?: string | undefined;
   readonly args?: Record<string, unknown> | undefined;
-}): ToolExecutionHookContext {
+}): PermissionPolicyContext {
   const toolName = input.toolName ?? 'Bash';
   const args = input.args ?? { command: 'printf first', timeout: 60 };
   const toolCall: ToolCall = {
@@ -1912,18 +1806,10 @@ function hookContext(input: {
     turnId: '0',
     stepNumber: 1,
     signal: new AbortController().signal,
-    llm: {} as ToolExecutionHookContext['llm'],
+    llm: {} as PermissionPolicyContext['llm'],
     toolCall,
     args,
-  };
-}
-
-function sessionAllowRule(): PermissionRule {
-  return {
-    decision: 'allow',
-    scope: 'session-runtime',
-    pattern: 'Bash',
-    reason: 'approve_for_session: run command',
+    execution: testExecution(toolName, args),
   };
 }
 
@@ -1938,6 +1824,68 @@ function permissionRule(
   };
 }
 
+function sessionAllowRule(): PermissionRule {
+  return {
+    decision: 'allow',
+    scope: 'session-runtime',
+    pattern: 'Bash',
+    reason: 'approve_for_session: run command',
+  };
+}
+
 function genericDisplay(): ToolInputDisplay {
   return { kind: 'generic', summary: 'Approve tool', detail: {} };
+}
+
+function testExecution(
+  toolName: string,
+  args: Record<string, unknown>,
+): PermissionPolicyContext['execution'] {
+  return {
+    description: testDescription(toolName),
+    display: testDisplay(toolName, args),
+    accesses: testAccesses(toolName, args),
+    execute: async () => ({ output: '' }),
+  };
+}
+
+function testDescription(toolName: string): string {
+  switch (toolName) {
+    case 'Bash':
+      return 'run command';
+    case 'ExitPlanMode':
+      return 'review plan';
+    case 'Read':
+      return 'read file';
+    case 'Write':
+      return 'write file';
+    case 'Edit':
+      return 'edit file';
+    default:
+      return `call ${toolName}`;
+  }
+}
+
+function testDisplay(toolName: string, args: Record<string, unknown>): ToolInputDisplay {
+  const path = typeof args['path'] === 'string' ? args['path'] : '/workspace/file.txt';
+  switch (toolName) {
+    case 'Bash':
+      return { kind: 'command', command: String(args['command'] ?? '') };
+    case 'Read':
+      return { kind: 'file_io', operation: 'read', path };
+    case 'Write':
+      return { kind: 'file_io', operation: 'write', path };
+    case 'Edit':
+      return { kind: 'file_io', operation: 'edit', path };
+    default:
+      return genericDisplay();
+  }
+}
+
+function testAccesses(toolName: string, args: Record<string, unknown>) {
+  const path = typeof args['path'] === 'string' ? args['path'] : undefined;
+  if (toolName === 'Read' && path !== undefined) return ToolAccesses.readFile(path);
+  if (toolName === 'Write' && path !== undefined) return ToolAccesses.writeFile(path);
+  if (toolName === 'Edit' && path !== undefined) return ToolAccesses.readWriteFile(path);
+  return ToolAccesses.none();
 }
