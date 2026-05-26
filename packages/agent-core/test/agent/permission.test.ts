@@ -2029,6 +2029,27 @@ describe('Permission rule helpers', () => {
     expect(ruleMatches(permissionRule('Read()'), 'Write', { path: '/workspace/a.ts' })).toBe(false);
   });
 
+  it('matches paths case-insensitively so case-only variants cannot bypass rules', () => {
+    expect(
+      ruleMatches(permissionRule('Edit(/repo/secrets.env)'), 'Edit', { path: '/repo/Secrets.env' }, {
+        matchesRule: (ruleArgs) =>
+          matchesPathRuleSubject(ruleArgs, '/repo/Secrets.env', {
+            cwd: '/repo',
+            pathClass: 'posix',
+          }),
+      }),
+    ).toBe(true);
+    expect(
+      ruleMatches(permissionRule('Edit(/repo/Sub/**)'), 'Edit', { path: '/repo/sub/a.ts' }, {
+        matchesRule: (ruleArgs) =>
+          matchesPathRuleSubject(ruleArgs, '/repo/sub/a.ts', {
+            cwd: '/repo',
+            pathClass: 'posix',
+          }),
+      }),
+    ).toBe(true);
+  });
+
   it('delegates rule argument semantics to execution.matchesRule when available', () => {
     const execution = {
       matchesRule: vi.fn((ruleArgs: string) => ruleArgs === 'semantic match'),
