@@ -82,6 +82,13 @@ describe('KaosPath', () => {
       expect(new KaosPath('/usr', '/etc').toString()).toBe('/etc');
     });
 
+    it('should accept backslashes as separators on posix', () => {
+      const p = new KaosPath('foo\\bar\\baz');
+      expect(p.toString()).toBe('foo/bar/baz');
+      expect(p.name).toBe('baz');
+      expect(p.parent.toString()).toBe('foo/bar');
+    });
+
     it('should preserve parent references until canonical()', () => {
       const p = new KaosPath('/usr').joinpath('../etc');
       expect(p.toString()).toBe('/usr/../etc');
@@ -427,6 +434,17 @@ describe('KaosPath', () => {
       expect(p.toLocalPath()).toBe(original);
       expect(p.toString()).toBe(original);
     });
+
+    it('should return backslashes for win32 toLocalPath', () => {
+      const innerToken = setCurrentKaos(makeMockKaos('win32'));
+      try {
+        const p = new KaosPath('C:/Users/test/file.txt');
+        expect(p.toLocalPath()).toBe('C:\\Users\\test\\file.txt');
+        expect(p.toString()).toBe('C:/Users/test/file.txt');
+      } finally {
+        resetCurrentKaos(innerToken);
+      }
+    });
   });
 
   describe('equals', () => {
@@ -459,9 +477,9 @@ describe('KaosPath', () => {
       const innerToken = setCurrentKaos(makeMockKaos('win32'));
       try {
         const winPath = new KaosPath('C:\\workspace');
-        // win32 paths are normalised to forward slashes; posix keeps the raw
-        // backslash because it is treated as a literal filename character.
-        expect(posixPath.toString()).toBe('C:\\workspace');
+        // Both path classes normalise backslashes to forward slashes;
+        // they differ only in pathClass, so equals is still false.
+        expect(posixPath.toString()).toBe('C:/workspace');
         expect(winPath.toString()).toBe('C:/workspace');
         expect(posixPath.equals(winPath)).toBe(false);
       } finally {
