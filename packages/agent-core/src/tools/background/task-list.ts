@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { BuiltinTool } from '../../agent/tool';
 import type { ToolExecution } from '../../loop/types';
 import { toInputJsonSchema } from '../support/input-schema';
-import { literalRulePattern, matchesGlobRuleSubject } from '../support/rule-match';
+import { matchesGlobRuleSubject } from '../support/rule-match';
 import type { BackgroundProcessManager, BackgroundTaskInfo } from './manager';
 import { isBackgroundTaskTerminal } from './manager';
 import TASK_LIST_DESCRIPTION from './task-list.md';
