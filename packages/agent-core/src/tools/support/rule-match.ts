@@ -14,19 +14,6 @@ export function escapeRuleSubjectLiteral(subject: string): string {
   return subject.replace(GLOB_LITERAL_SPECIAL, '\\$&');
 }
 
-export function matchesRuleSubject(ruleArgs: string, subject: string): boolean {
-  if (ruleArgs.length === 0) return true;
-  try {
-    return new RegExp(ruleArgs).test(subject);
-  } catch {
-    return false;
-  }
-}
-
-export function matchesAnyRuleSubject(ruleArgs: string, subjects: readonly string[]): boolean {
-  return subjects.some((subject) => matchesRuleSubject(ruleArgs, subject));
-}
-
 export function matchesGlobRuleSubject(ruleArgs: string, subject: string): boolean {
   return matchRuleSubjects(ruleArgs, [subject], (pattern, value) => globMatch(value, pattern));
 }
