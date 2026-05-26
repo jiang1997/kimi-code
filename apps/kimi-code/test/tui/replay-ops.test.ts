@@ -52,6 +52,15 @@ function backgroundTask(
   };
 }
 
+function toolCall(id: string, name: string, args: string = '{}'): ToolCall {
+  return {
+    type: 'function',
+    id,
+    name,
+    arguments: args,
+  };
+}
+
 describe('projectReplayRecords', () => {
   it('projects only the most recent ten visible user turns from agent replay', () => {
     const projected = projectReplayRecords(
@@ -542,18 +551,93 @@ describe('projectReplayRecords', () => {
     );
   });
 
-  it('skips plan review approval replay records while keeping normal approvals', () => {
+  it('projects rejected plan reviews as status notices but keeps the final approved plan card', () => {
     const projected = projectReplayRecords([
+      message('assistant', [], {
+        toolCalls: [toolCall('call_exit_reject', 'ExitPlanMode')],
+      }),
       {
         type: 'approval_result',
         record: {
           turnId: 0,
-          toolCallId: 'call_exit_plan',
+          toolCallId: 'call_exit_reject',
           action: 'Review plan',
           toolName: 'ExitPlanMode',
           result: {
             decision: 'rejected',
             selectedLabel: 'Reject',
+          },
+        },
+      },
+      message('tool', [{ type: 'text', text: 'Plan rejected by user. Plan mode remains active.' }], {
+        toolCallId: 'call_exit_reject',
+        isError: true,
+      }),
+      message('assistant', [], {
+        toolCalls: [toolCall('call_exit_revise', 'ExitPlanMode')],
+      }),
+      {
+        type: 'approval_result',
+        record: {
+          turnId: 0,
+          toolCallId: 'call_exit_revise',
+          action: 'Review plan',
+          toolName: 'ExitPlanMode',
+          result: {
+            decision: 'rejected',
+            selectedLabel: 'Revise',
+            feedback: 'please rethink step 2',
+          },
+        },
+      },
+      message('tool', [{ type: 'text', text: 'User rejected the plan. Feedback:\n\nplease rethink step 2' }], {
+        toolCallId: 'call_exit_revise',
+      }),
+      message('assistant', [], {
+        toolCalls: [toolCall('call_exit_approved', 'ExitPlanMode')],
+      }),
+      {
+        type: 'approval_result',
+        record: {
+          turnId: 0,
+          toolCallId: 'call_exit_approved',
+          action: 'Review plan',
+          toolName: 'ExitPlanMode',
+          result: {
+            decision: 'approved',
+            selectedLabel: 'Option A',
+          },
+        },
+      },
+      message(
+        'tool',
+        [
+          {
+            type: 'text',
+            text:
+              'Exited plan mode. Selected approach: Option A\n' +
+              'Execute ONLY the selected approach. Do not execute any unselected alternatives.\n\n' +
+              'Plan mode deactivated. All tools are now available.\n' +
+              'Plan saved to: /tmp/final-plan.md\n\n' +
+              '## Approved Plan:\n# Final Plan\n\n- ship the final plan',
+          },
+        ],
+        {
+          toolCallId: 'call_exit_approved',
+        },
+      ),
+      message('assistant', [], {
+        toolCalls: [toolCall('call_exit_cancelled', 'ExitPlanMode')],
+      }),
+      {
+        type: 'approval_result',
+        record: {
+          turnId: 0,
+          toolCallId: 'call_exit_cancelled',
+          action: 'Review plan',
+          toolName: 'ExitPlanMode',
+          result: {
+            decision: 'cancelled',
           },
         },
       },
@@ -571,9 +655,23 @@ describe('projectReplayRecords', () => {
       },
     ]);
 
-    expect(projected.entries.map((e) => [e.kind, e.renderMode, e.content])).toEqual([
-      ['status', 'notice', 'Approved: run command'],
+    expect(projected.entries.map((e) => [e.kind, e.renderMode, e.content, e.detail])).toEqual([
+      ['status', 'notice', 'Plan review rejected', undefined],
+      ['status', 'notice', 'Plan sent back for revision', 'Feedback: please rethink step 2'],
+      ['tool_call', 'plain', '', undefined],
+      ['status', 'notice', 'Plan review cancelled', undefined],
+      ['status', 'notice', 'Approved: run command', undefined],
     ]);
+    expect(
+      projected.entries.filter((entry) => entry.toolCallData?.name === 'ExitPlanMode'),
+    ).toHaveLength(1);
+    expect(projected.entries[2]?.toolCallData).toMatchObject({
+      id: 'call_exit_approved',
+      name: 'ExitPlanMode',
+      result: {
+        output: expect.stringContaining('## Approved Plan:\n# Final Plan'),
+      },
+    });
   });
 
   it('ignores config replay records and system injections', () => {

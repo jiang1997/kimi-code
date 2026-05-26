@@ -358,34 +358,6 @@ describe('ToolCallComponent', () => {
     expect(out).not.toContain('Plan mode remains active.');
   });
 
-  it('renders an injected plan preview body and path', () => {
-    const component = new ToolCallComponent(
-      {
-        id: 'call_exit_preview',
-        name: 'ExitPlanMode',
-        args: {},
-        planPreview: {
-          content: '# Resumed Plan\n\n- replay current active plan',
-          path: '/tmp/plans/resumed-plan.md',
-        },
-      },
-      {
-        tool_call_id: 'call_exit_preview',
-        output: 'Plan rejected by user. Plan mode remains active.',
-        is_error: true,
-      },
-      darkColors,
-      undefined,
-      createMarkdownTheme(darkColors),
-    );
-
-    const out = strip(component.render(100).join('\n'));
-    expect(out).toContain('plan: resumed-plan.md · Rejected');
-    expect(out).toContain('Resumed Plan');
-    expect(out).toContain('replay current active plan');
-    expect(out).not.toContain('/tmp/plans/resumed-plan.md');
-  });
-
   it('suppresses EnterPlanMode success body so prompt scaffolding does not leak into the transcript', () => {
     const component = new ToolCallComponent(
       {

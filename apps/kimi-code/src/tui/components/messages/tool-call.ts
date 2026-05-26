@@ -516,8 +516,6 @@ export class ToolCallComponent extends Container {
     this.colors = colors;
     this.ui = ui;
     this.markdownTheme = markdownTheme;
-    this.currentPlan = toolCall.planPreview?.content;
-    this.planPath = toolCall.planPreview?.path;
     this.applySubagentReplay(toolCall.subagent);
 
     this.addChild(new Spacer(1));
@@ -1539,7 +1537,7 @@ export class ToolCallComponent extends Container {
       const approved = extractApprovedPlan(this.result.output);
       if (approved.length > 0) return approved;
     }
-    return this.currentPlan ?? this.toolCall.planPreview?.content ?? '';
+    return this.currentPlan ?? '';
   }
 
   // Priority: approved result.output with 'Plan saved to: <path>', then the
@@ -1549,7 +1547,7 @@ export class ToolCallComponent extends Container {
       const fromResult = interpretExitPlanModeOutcome(this.result.output).path;
       if (fromResult !== undefined && fromResult.length > 0) return fromResult;
     }
-    return this.planPath ?? this.toolCall.planPreview?.path;
+    return this.planPath;
   }
 
   private resolvePlanBoxStatus(): { label: string; colorHex: string } | undefined {

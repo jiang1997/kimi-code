@@ -247,7 +247,7 @@ describe('hydrateProjectedEntries', () => {
     expect(state.todoPanelContainer.children).not.toContain(state.todoPanel);
   });
 
-  it('hydrates active plan preview into rejected ExitPlanMode replay cards', async () => {
+  it('hydrates rejected plan reviews as status while keeping the final approved plan box', async () => {
     const state = makeTuiState();
     const replay: AgentReplayRecord[] = [
       {
@@ -259,12 +259,23 @@ describe('hydrateProjectedEntries', () => {
             {
               type: 'function',
               id: 'call_exit_resume',
-              function: {
-                name: 'ExitPlanMode',
-                arguments: '{}',
-              },
+              name: 'ExitPlanMode',
+              arguments: '{}',
             },
           ],
+        },
+      },
+      {
+        type: 'approval_result',
+        record: {
+          turnId: 1,
+          toolCallId: 'call_exit_resume',
+          action: 'Review plan',
+          toolName: 'ExitPlanMode',
+          result: {
+            decision: 'rejected',
+            selectedLabel: 'Reject',
+          },
         },
       },
       {
@@ -275,6 +286,52 @@ describe('hydrateProjectedEntries', () => {
           toolCalls: [],
           toolCallId: 'call_exit_resume',
           isError: true,
+        },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [],
+          toolCalls: [
+            {
+              type: 'function',
+              id: 'call_exit_final',
+              name: 'ExitPlanMode',
+              arguments: '{}',
+            },
+          ],
+        },
+      },
+      {
+        type: 'approval_result',
+        record: {
+          turnId: 2,
+          toolCallId: 'call_exit_final',
+          action: 'Review plan',
+          toolName: 'ExitPlanMode',
+          result: {
+            decision: 'approved',
+            selectedLabel: 'Approve',
+          },
+        },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'tool',
+          content: [
+            {
+              type: 'text',
+              text:
+                'Exited plan mode. Plan mode deactivated. All tools are now available.\n' +
+                'Plan saved to: /tmp/plans/final-plan.md\n\n' +
+                '## Approved Plan:\n# Final Plan\n\n- replay final approved plan',
+            },
+          ],
+          toolCalls: [],
+          toolCallId: 'call_exit_final',
+          isError: false,
         },
       },
     ];
@@ -312,9 +369,13 @@ describe('hydrateProjectedEntries', () => {
     const transcript = strip(state.transcriptContainer.render(120).join('\n'));
     expect(ok).toBe(true);
     expect(errors).toEqual([]);
-    expect(transcript).toContain('plan: active-plan.md · Rejected');
-    expect(transcript).toContain('Resume Plan');
-    expect(transcript).toContain('replay current active plan');
+    expect(transcript).toContain('Plan review rejected');
+    expect(transcript).toContain('plan: final-plan.md');
+    expect(transcript).toContain('Final Plan');
+    expect(transcript).toContain('replay final approved plan');
+    expect(transcript).not.toContain('plan: active-plan.md');
+    expect(transcript).not.toContain('Resume Plan');
+    expect(transcript).not.toContain('replay current active plan');
     expect(transcript).not.toContain('Plan rejected by user.');
     expect(transcript).not.toContain('/tmp/plans/active-plan.md');
   });
@@ -441,7 +502,9 @@ describe('hydrateTodoPanelFromResume', () => {
     return {
       setAppState: vi.fn(),
       appendEntry: vi.fn(),
-      setTodoList: (todos: Parameters<typeof setTodoList>[1]) => setTodoList(state, todos),
+      setTodoList: (todos: Parameters<typeof setTodoList>[1]) => {
+        setTodoList(state, todos);
+      },
       emitError: vi.fn(),
     };
   }

@@ -89,7 +89,7 @@ export async function hydrateTranscriptFromReplay(
       return false;
     }
 
-    const projection = projectReplayRecords(main.replay, main.background, main.plan);
+    const projection = projectReplayRecords(main.replay, main.background);
     hydrateProjectedEntries(state, projection.entries, hooks.appendEntry);
     hydrateTodoPanelFromResume(main, hooks);
     state.backgroundAgents = new Set(projection.backgroundAgents);
@@ -191,7 +191,6 @@ function appStateFromResumeAgent(agent: ResumedAgentState): Partial<AppState> {
 export function projectReplayRecords(
   records: readonly AgentReplayRecord[],
   backgroundTasks: readonly BackgroundTaskInfo[] = [],
-  activePlan: ResumedAgentState['plan'] | undefined = undefined,
 ): ReplayProjection {
   const state: ProjectionState = {
     entries: [],
@@ -207,7 +206,6 @@ export function projectReplayRecords(
     projectReplayRecord(state, record);
   }
   flushAssistant(state);
-  attachActivePlanPreview(state.entries, activePlan);
 
   return {
     entries: state.entries,
@@ -265,7 +263,10 @@ function projectReplayRecord(state: ProjectionState, record: AgentReplayRecord):
     case 'approval_result': {
       flushAssistant(state);
       const { record: approvalRecord } = record;
-      if (approvalRecord.toolName === 'ExitPlanMode') return;
+      if (approvalRecord.toolName === 'ExitPlanMode') {
+        projectPlanReviewResult(state, approvalRecord);
+        return;
+      }
       const { result } = approvalRecord;
       const parts: string[] = [];
       switch (result.decision) {
@@ -291,21 +292,34 @@ function projectReplayRecord(state: ProjectionState, record: AgentReplayRecord):
   }
 }
 
-function attachActivePlanPreview(
-  entries: TranscriptEntry[],
-  activePlan: ResumedAgentState['plan'] | undefined,
-): void {
-  if (activePlan === undefined || activePlan === null || activePlan.content.length === 0) {
-    return;
+type ApprovalReplayRecord = Extract<AgentReplayRecord, { type: 'approval_result' }>['record'];
+
+function projectPlanReviewResult(state: ProjectionState, record: ApprovalReplayRecord): void {
+  const { result } = record;
+  if (result.decision === 'approved') return;
+  removeToolCallEntry(state, record.toolCallId);
+
+  let content: string;
+  switch (result.decision) {
+    case 'rejected':
+      content =
+        result.selectedLabel === 'Revise' ? 'Plan sent back for revision' : 'Plan review rejected';
+      break;
+    case 'cancelled':
+      content = 'Plan review cancelled';
+      break;
   }
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const toolCall = entries[index]?.toolCallData;
-    if (toolCall === undefined || toolCall.name !== 'ExitPlanMode') continue;
-    const inlinePlan = toolCall.args['plan'];
-    if (typeof inlinePlan === 'string' && inlinePlan.length > 0) continue;
-    toolCall.planPreview = { content: activePlan.content, path: activePlan.path };
-    return;
-  }
+  const feedback =
+    result.feedback !== undefined && result.feedback.length > 0
+      ? `Feedback: ${result.feedback}`
+      : undefined;
+  state.entries.push(entry('status', content, 'notice', { detail: feedback }));
+}
+
+function removeToolCallEntry(state: ProjectionState, toolCallId: string): void {
+  state.toolCalls.delete(toolCallId);
+  const index = state.entries.findIndex((entry) => entry.toolCallData?.id === toolCallId);
+  if (index >= 0) state.entries.splice(index, 1);
 }
 
 function projectPermissionUpdate(state: ProjectionState, mode: PermissionMode): void {
