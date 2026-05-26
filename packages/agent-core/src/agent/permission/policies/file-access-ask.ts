@@ -2,7 +2,7 @@ import * as posixPath from 'node:path/posix';
 import * as win32Path from 'node:path/win32';
 
 import type { Agent } from '../..';
-import type { ToolResourceAccess } from '../../../loop/tool-access';
+import type { ToolFileAccess } from '../../../loop/tool-access';
 import { isWithinDirectory, type PathClass } from '../../../tools/policies/path-access';
 import { isSensitiveFile } from '../../../tools/policies/sensitive';
 import {
@@ -18,7 +18,7 @@ export class SensitiveFileAccessAskPermissionPolicy implements PermissionPolicy 
 
   evaluate(context: PermissionPolicyContext): PermissionPolicyResult | undefined {
     const pathClass = this.agent.runtime.kaos.pathClass();
-    const access = firstFileAccess(context, (fileAccess) =>
+    const access = fileAccesses(context).find((fileAccess) =>
       isSensitiveFile(fileAccess.path, pathClass),
     );
     if (access === undefined) return;
@@ -81,7 +81,7 @@ export class CwdOutsideFileAccessAskPermissionPolicy implements PermissionPolicy
     const cwd = this.agent.config.cwd;
     if (cwd.length === 0) return;
     const pathClass = this.agent.runtime.kaos.pathClass();
-    const access = firstFileAccess(context, (fileAccess) => {
+    const access = fileAccesses(context).find((fileAccess) => {
       return !isWithinDirectory(fileAccess.path, cwd, pathClass);
     });
     if (access === undefined) return;
@@ -92,33 +92,20 @@ export class CwdOutsideFileAccessAskPermissionPolicy implements PermissionPolicy
   }
 }
 
-export type FileAccess = Extract<ToolResourceAccess, { kind: 'file' }>;
-
-function firstFileAccess(
-  context: PermissionPolicyContext,
-  predicate: (access: FileAccess) => boolean,
-): FileAccess | undefined {
-  return fileAccesses(context).find((access) => predicate(access));
-}
-
-function fileAccesses(context: PermissionPolicyContext): FileAccess[] {
+function fileAccesses(context: PermissionPolicyContext): ToolFileAccess[] {
   return (
-    context.execution.accesses?.filter((access): access is FileAccess => access.kind === 'file') ??
+    context.execution.accesses?.filter((access): access is ToolFileAccess => access.kind === 'file') ??
     []
   );
 }
 
-export function writeFileAccesses(context: PermissionPolicyContext): FileAccess[] {
-  return (
-    context.execution.accesses?.filter(
-      (access): access is FileAccess =>
-        access.kind === 'file' &&
-        (access.operation === 'write' || access.operation === 'readwrite'),
-    ) ?? []
+export function writeFileAccesses(context: PermissionPolicyContext): ToolFileAccess[] {
+  return fileAccesses(context).filter(
+    (access) => access.operation === 'write' || access.operation === 'readwrite',
   );
 }
 
-function fileAccessReason(access: FileAccess, extra: Record<string, boolean>) {
+function fileAccessReason(access: ToolFileAccess, extra: Record<string, boolean>) {
   return {
     file_access_operation: access.operation,
     recursive: access.recursive === true,

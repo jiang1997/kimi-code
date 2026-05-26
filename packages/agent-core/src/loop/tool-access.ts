@@ -16,6 +16,7 @@ export type ToolResourceAccess =
       readonly kind: 'all';
     };
 
+export type ToolFileAccess = Extract<ToolResourceAccess, { kind: 'file' }>;
 export type ToolAccesses = readonly ToolResourceAccess[];
 
 export const ToolAccesses = {
@@ -101,10 +102,7 @@ function fileOperationWrites(operation: ToolFileAccessOperation): boolean {
   }
 }
 
-function fileAccessesOverlap(
-  left: Extract<ToolResourceAccess, { kind: 'file' }>,
-  right: Extract<ToolResourceAccess, { kind: 'file' }>,
-): boolean {
+function fileAccessesOverlap(left: ToolFileAccess, right: ToolFileAccess): boolean {
   const leftPath = normalizePath(left.path);
   const rightPath = normalizePath(right.path);
   if (leftPath === rightPath) return true;
