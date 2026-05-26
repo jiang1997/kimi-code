@@ -608,6 +608,38 @@ describe('Permission auto mode', () => {
     );
   });
 
+  it('reuses approve-for-session even when an ask rule still matches the call', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+      scope: 'session',
+      selectedLabel: 'Approve for this session',
+    }));
+    manager.rules.push({
+      decision: 'ask',
+      scope: 'user',
+      pattern: 'Bash',
+    });
+    const call = () =>
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_bash_session_after_ask',
+        }),
+      );
+
+    await expect(call()).resolves.toBeUndefined();
+    await expect(call()).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'session-approval-history',
+        tool_name: 'Bash',
+        decision: 'approve',
+      }),
+    );
+  });
+
   it('reuses approve-for-session for repeated outside-workspace reads in yolo mode', async () => {
     const { manager, requestApproval } = makePermissionManager(async () => ({
       decision: 'approved',
@@ -641,10 +673,10 @@ describe('Permission policy chain', () => {
       'plan-mode-guard-deny',
       'user-configured-deny',
       'auto-mode-approve',
-      'user-configured-ask',
-      'exit-plan-mode-review-ask',
-      'user-configured-allow',
       'session-approval-history',
+      'user-configured-ask',
+      'user-configured-allow',
+      'exit-plan-mode-review-ask',
       'plan-mode-tool-approve',
       'sensitive-file-access-ask',
       'git-control-path-access-ask',
@@ -948,7 +980,7 @@ describe('ExitPlanMode permission policy', () => {
     });
   });
 
-  it('keeps plan review ahead of matching session approval history', async () => {
+  it('reuses session approval for ExitPlanMode without re-prompting plan review', async () => {
     const { manager, requestApproval, exit } = makePlanPermissionManager({
       mode: 'manual',
       plan: '# Updated Plan',
@@ -972,25 +1004,9 @@ describe('ExitPlanMode permission policy', () => {
       }),
     );
 
-    expect(requestApproval).toHaveBeenCalledTimes(1);
-    expect(exit).toHaveBeenCalled();
-    expect(result).toMatchObject({
-      syntheticResult: {
-        isError: false,
-        output: expect.stringContaining('Exited plan mode.'),
-      },
-    });
-    expect(requestApproval).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: 'ExitPlanMode',
-        action: 'Presenting plan and exiting plan mode',
-        display: expect.objectContaining({
-          kind: 'plan_review',
-          plan: '# Updated Plan',
-        }),
-      }),
-      { signal: expect.any(AbortSignal) },
-    );
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
   });
 
   it('returns a synthetic stop-turn result when the user rejects the plan', async () => {
