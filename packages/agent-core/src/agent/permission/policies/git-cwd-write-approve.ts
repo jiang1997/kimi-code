@@ -23,10 +23,10 @@ export class GitCwdWriteApprovePermissionPolicy implements PermissionPolicy {
 
     const writeAccesses =
       context.execution.accesses?.filter(
-      (access): access is FileAccess =>
-        access.kind === 'file' &&
-        (access.operation === 'write' || access.operation === 'readwrite'),
-    ) ?? [];
+        (access): access is FileAccess =>
+          access.kind === 'file' &&
+          (access.operation === 'write' || access.operation === 'readwrite'),
+      ) ?? [];
     if (writeAccesses.length === 0) return;
     if (!writeAccesses.every((access) => isWithinDirectory(access.path, cwd, 'posix'))) {
       return;
