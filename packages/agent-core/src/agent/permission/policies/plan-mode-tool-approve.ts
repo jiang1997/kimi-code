@@ -16,8 +16,8 @@ export class PlanModeToolApprovePermissionPolicy implements PermissionPolicy {
     }
 
     if (
-      this.agent.planMode.isActive &&
       (toolName === 'Write' || toolName === 'Edit') &&
+      this.agent.planMode.isActive &&
       writesOnlyPlanFile(context, this.agent.planMode.planFilePath)
     ) {
       return {
@@ -25,16 +25,22 @@ export class PlanModeToolApprovePermissionPolicy implements PermissionPolicy {
       };
     }
 
-    if (toolName !== 'ExitPlanMode') return;
-    if (context.execution.display?.kind !== 'plan_review') {
+    if (toolName === 'ExitPlanMode') {
+      if (!this.agent.planMode.isActive) {
+        return {
+          kind: 'approve',
+        };
+      }
+      if (context.execution.display?.kind !== 'plan_review') {
+        return {
+          kind: 'approve',
+        };
+      }
+      if (context.execution.display.plan.trim().length > 0) return;
       return {
         kind: 'approve',
       };
     }
-    if (context.execution.display.plan.trim().length > 0) return;
-    return {
-      kind: 'approve',
-    };
   }
 }
 
@@ -44,6 +50,5 @@ function writesOnlyPlanFile(
 ): boolean {
   if (planFilePath === null) return false;
   const writeAccesses = writeFileAccesses(context);
-  if (writeAccesses.length === 0) return false;
   return writeAccesses.every((access) => access.path === planFilePath);
 }

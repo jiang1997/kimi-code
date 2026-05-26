@@ -16,13 +16,12 @@
 - `Approve for session` 的可记忆对象由 `execution.approvalRule` 表达，值是完整的 permission rule 字符串，例如 `Bash(git status)` / `Read(/repo/a.txt)`
 - `approvalRule` 由 tool 根据自己的语义生成；permission policy 不从 raw args 推导命令、路径、搜索表达式、agent type、skill identity 等字段
 - 内置 tool 提供 `matchesRule` 时沿用 permission DSL 的旧匹配语义：空 pattern 命中，leading `!` 表示取反；路径 subject 使用 path glob 语义，普通字符串 subject 使用 glob 语义
-- 如果 execution 没有提供 `matchesRule`，则使用稳定序列化后的完整 tool args 作为 fallback subject；匹配语义参考 kimi-cli hook matcher：空 pattern 命中，非空 pattern 按 regex search 判断，非法 regex 不命中
-- fallback matching 是兼容机制，不表达 tool 专属语义；需要自然、精确的参数规则时，tool 应实现 `matchesRule`
+- 如果 execution 没有提供 `matchesRule`，带括号参数的规则不命中；需要参数级别匹配时，tool 必须实现 `matchesRule`
 - approval UI 使用 `execution.display` / `execution.description`；需要状态型审批 UI 的 tool（例如 `ExitPlanMode` 的 plan 内容与选项）也必须由自己的 `resolveExecution` 返回展示信息；`PermissionPolicy` 不返回、不拼接、不改写 UI 展示文本
 
 **Telemetry contract：**
 
-- `PermissionPolicy` 不直接打 telemetry；单队列执行器在 policy 命中和 approval 完成时统一打点
+- `PermissionPolicy` 不直接打 permission 相关 telemetry；单队列执行器在 policy 命中和 approval 完成时统一打点。`exit-plan-mode-review-ask` 例外：它在自己的 `resolveApproval` 回调中记录 `plan_resolved` 事件，用于追踪 plan review 的最终用户决策
 - `PermissionPolicy` 可以返回开放结构的 `reason` object；`reason` 只放额外的非敏感 primitive 摘要，没有额外信息时省略
 - Policy 命中时记录 `permission_policy_decision`
   - `policy_name`: 命中的 policy name，例如 `cwd-outside-file-access-ask`
@@ -35,7 +34,7 @@
   - `tool_name`, `permission_mode`
   - 可记录 `has_feedback`、`approval_surface`、`duration_ms`、`session_cache_written`
 - `reason` 和 telemetry 都不记录 raw tool args、raw path、raw command、用户配置 rule 原文、approval UI 文本
-- 用户配置规则命中时只记录非敏感匹配摘要，例如 `rule_decision`、`has_rule_args`、`match_strategy`，其中 `match_strategy` 可为 `tool_name_only` / `matches_rule` / `stable_args_fallback` / `single_field_fallback`
+- 用户配置规则命中时只记录非敏感匹配摘要，例如 `rule_decision`、`has_rule_args`、`match_strategy`，其中 `match_strategy` 可为 `tool_name_only` / `matches_rule`
 
 ## pre-tool-call-hook: PreToolCall Hook Decision
 
@@ -59,12 +58,8 @@
 - 用户规则按配置顺序扫描，命中第一条本阶段对应 decision 的 rule 即返回
 - `ToolName` 无括号参数时只匹配 tool name
 - `ToolName(ruleArgs)` 先匹配 tool name；tool name 命中后调用 `execution.matchesRule(ruleArgs)`，返回 `true` 才算命中
-- 如果 rule 带括号参数但 execution 没有提供 `matchesRule`，则用 `ruleArgs` 匹配稳定序列化后的完整 tool args
-- fallback subject 的稳定序列化必须让 object key 顺序不影响结果，数组顺序和字符串内容保持原样
-- fallback 匹配语义参考 kimi-cli hook matcher：空 `ruleArgs` 命中；非空 `ruleArgs` 作为 regex pattern 对 fallback subject 做 search；非法 regex 不命中；不是 fullmatch，也不是 literal substring
-- 如果 tool args 是只有一个实际字段的 object，fallback 可以同时把该唯一字段的值作为第二个 subject，并使用同一套 regex search 语义匹配
 - `mcp__server__tool` / `mcp__server__*` 仍通过 tool name 匹配 MCP tool name
-- `*(ruleArgs)` 可作为全工具匹配模式；tool name 命中所有工具，括号参数仍按 `matchesRule` 或 fallback matching 解释
+- `*(ruleArgs)` 可作为全工具匹配模式；tool name 命中所有工具，括号参数仍按 `matchesRule` 解释
 - 路径、命令、搜索表达式、agent type、skill identity 等参数语义由对应 tool 的 `resolveExecution` / `matchesRule` 定义，不在 policy 中硬编码
 
 ## auto-mode-approve: Auto Mode Approve
@@ -119,7 +114,7 @@
 
 ## default-tool-approve: Default Tool Approve
 
-- 默认 `Read` / `Grep` / `Glob` / `ReadMediaFile` / `Think` / `SetTodoList` / `TaskList` / `TaskOutput` / `WebSearch` / `FetchURL` / `Agent` / `AskUserQuestion` / `Skill` -> `approve`
+- 默认 `Read` / `Grep` / `Glob` / `ReadMediaFile` / `SetTodoList` / `TodoList` / `TaskList` / `TaskOutput` / `WebSearch` / `FetchURL` / `Agent` / `AskUserQuestion` / `Skill` -> `approve`
 
 ## git-cwd-write-approve: Git CWD Write Approve
 
