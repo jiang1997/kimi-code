@@ -108,6 +108,16 @@ function fileAccesses(context: PermissionPolicyContext): FileAccess[] {
   );
 }
 
+export function writeFileAccesses(context: PermissionPolicyContext): FileAccess[] {
+  return (
+    context.execution.accesses?.filter(
+      (access): access is FileAccess =>
+        access.kind === 'file' &&
+        (access.operation === 'write' || access.operation === 'readwrite'),
+    ) ?? []
+  );
+}
+
 function fileAccessReason(access: FileAccess, extra: Record<string, boolean>) {
   return {
     file_access_operation: access.operation,

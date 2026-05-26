@@ -1,6 +1,6 @@
 import type { Agent } from '../..';
-import type { ToolResourceAccess } from '../../../loop/tool-access';
 import type { PermissionPolicy, PermissionPolicyContext, PermissionPolicyResult } from '../types';
+import { writeFileAccesses } from './file-access-ask';
 
 export class PlanModeGuardDenyPermissionPolicy implements PermissionPolicy {
   readonly name = 'plan-mode-guard-deny';

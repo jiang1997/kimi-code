@@ -1,11 +1,11 @@
 import type { Agent } from '../..';
-import type { ToolResourceAccess } from '../../../loop/tool-access';
 import { isWithinDirectory } from '../../../tools/policies/path-access';
 import {
   findGitWorkTreeMarker,
   type GitWorkTreeMarker,
 } from '../../../tools/support/git-worktree';
 import type { PermissionPolicy, PermissionPolicyContext, PermissionPolicyResult } from '../types';
+import { writeFileAccesses, type FileAccess } from './file-access-ask';
 
 export class GitCwdWriteApprovePermissionPolicy implements PermissionPolicy {
   private readonly gitMarkerCache = new Map<string, GitWorkTreeMarker | null>();

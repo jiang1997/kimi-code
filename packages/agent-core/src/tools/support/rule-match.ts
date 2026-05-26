@@ -31,15 +31,15 @@ export function matchesGlobRuleSubject(ruleArgs: string, subject: string): boole
   return matchRuleSubjects(ruleArgs, [subject], (pattern, value) => globMatch(value, pattern));
 }
 
-export function matchesAnyPathRuleSubject(
+export function matchesPathRuleSubject(
   ruleArgs: string,
-  subjects: readonly string[],
+  subject: string,
   options: {
     readonly pathOptions?: PermissionPathMatchOptions;
     readonly conservativeCaseFold?: boolean;
   } = {},
 ): boolean {
-  return matchRuleSubjects(ruleArgs, subjects, (pattern, value) =>
+  return matchRuleSubjects(ruleArgs, [subject], (pattern, value) =>
     pathGlobMatch(value, pattern, {
       pathOptions: options.pathOptions,
       conservativeCaseFold: options.conservativeCaseFold ?? false,

@@ -31,7 +31,7 @@ import { renderPrompt } from '../../../utils/render-prompt';
 import { resolvePathAccessPath } from '../../policies/path-access';
 import { MEDIA_SNIFF_BYTES, detectFileType, sniffImageDimensions } from '../../support/file-type';
 import { toInputJsonSchema } from '../../support/input-schema';
-import { literalRulePattern, matchesAnyPathRuleSubject } from '../../support/rule-match';
+import { literalRulePattern, matchesPathRuleSubject } from '../../support/rule-match';
 import type { WorkspaceConfig } from '../../support/workspace';
 import readMediaDescriptionHead from './read-media.md';
 
@@ -153,7 +153,7 @@ export class ReadMediaFileTool implements BuiltinTool<ReadMediaFileInput> {
       display: { kind: 'file_io', operation: 'read', path },
       approvalRule: literalRulePattern(this.name, path),
       matchesRule: (ruleArgs) =>
-        matchesAnyPathRuleSubject(ruleArgs, [path, args.path], {
+        matchesPathRuleSubject(ruleArgs, path, {
           pathOptions: {
             cwd: this.workspace.workspaceDir,
             pathClass: this.kaos.pathClass(),

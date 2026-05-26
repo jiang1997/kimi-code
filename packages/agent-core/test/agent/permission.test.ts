@@ -22,7 +22,7 @@ import { ToolAccesses } from '../../src/loop';
 import type { ToolInputDisplay } from '../../src/tools/display';
 import {
   literalRulePattern,
-  matchesAnyPathRuleSubject,
+  matchesPathRuleSubject,
   matchesGlobRuleSubject,
 } from '../../src/tools/support/rule-match';
 import { createFakeKaos } from '../tools/fixtures/fake-kaos';
@@ -1957,13 +1957,13 @@ describe('Permission rule helpers', () => {
     ).toBe(false);
     expect(
       ruleMatches(permissionRule('Read(/etc/**)'), 'Read', { path: '/etc/passwd' }, {
-        matchesRule: (ruleArgs) => matchesAnyPathRuleSubject(ruleArgs, ['/etc/passwd']),
+        matchesRule: (ruleArgs) => matchesPathRuleSubject(ruleArgs, '/etc/passwd'),
       }),
     ).toBe(true);
     expect(
       ruleMatches(permissionRule('Edit(!./src/**)'), 'Edit', { path: './README.md' }, {
         matchesRule: (ruleArgs) =>
-          matchesAnyPathRuleSubject(ruleArgs, ['/workspace/README.md', './README.md'], {
+          matchesPathRuleSubject(ruleArgs, '/workspace/README.md', {
             pathOptions: { cwd: '/workspace', pathClass: 'posix' },
           }),
       }),
@@ -1971,7 +1971,7 @@ describe('Permission rule helpers', () => {
     expect(
       ruleMatches(permissionRule('Edit(!./src/**)'), 'Edit', { path: './src/a.ts' }, {
         matchesRule: (ruleArgs) =>
-          matchesAnyPathRuleSubject(ruleArgs, ['/workspace/src/a.ts', './src/a.ts'], {
+          matchesPathRuleSubject(ruleArgs, '/workspace/src/a.ts', {
             pathOptions: { cwd: '/workspace', pathClass: 'posix' },
           }),
       }),
@@ -2226,7 +2226,7 @@ function testExecution(
     matchesRule:
       ruleSubject === undefined
         ? undefined
-        : (ruleArgs) => testMatchesRuleSubject(toolName, args, ruleArgs, ruleSubject),
+        : (ruleArgs) => testMatchesRuleSubject(toolName, ruleArgs, ruleSubject),
     execute: async () => ({ output: '' }),
   };
 }
@@ -2250,7 +2250,6 @@ function testRuleSubject(toolName: string, args: Record<string, unknown>): strin
 
 function testMatchesRuleSubject(
   toolName: string,
-  args: Record<string, unknown>,
   ruleArgs: string,
   ruleSubject: string,
 ): boolean {
@@ -2259,7 +2258,7 @@ function testMatchesRuleSubject(
     case 'ReadMediaFile':
     case 'Write':
     case 'Edit':
-      return matchesAnyPathRuleSubject(ruleArgs, [ruleSubject, stringArg(args, 'path')]);
+      return matchesPathRuleSubject(ruleArgs, ruleSubject);
     default:
       return matchesGlobRuleSubject(ruleArgs, ruleSubject);
   }
