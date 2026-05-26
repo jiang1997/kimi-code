@@ -89,7 +89,7 @@ export async function hydrateTranscriptFromReplay(
       return false;
     }
 
-    const projection = projectReplayRecords(main.replay, main.background);
+    const projection = projectReplayRecords(main.replay, main.background, main.plan);
     hydrateProjectedEntries(state, projection.entries, hooks.appendEntry);
     hydrateTodoPanelFromResume(main, hooks);
     state.backgroundAgents = new Set(projection.backgroundAgents);
@@ -191,6 +191,7 @@ function appStateFromResumeAgent(agent: ResumedAgentState): Partial<AppState> {
 export function projectReplayRecords(
   records: readonly AgentReplayRecord[],
   backgroundTasks: readonly BackgroundTaskInfo[] = [],
+  activePlan: ResumedAgentState['plan'] | undefined = undefined,
 ): ReplayProjection {
   const state: ProjectionState = {
     entries: [],
@@ -206,6 +207,7 @@ export function projectReplayRecords(
     projectReplayRecord(state, record);
   }
   flushAssistant(state);
+  attachActivePlanPreview(state.entries, activePlan);
 
   return {
     entries: state.entries,
@@ -263,6 +265,7 @@ function projectReplayRecord(state: ProjectionState, record: AgentReplayRecord):
     case 'approval_result': {
       flushAssistant(state);
       const { record: approvalRecord } = record;
+      if (approvalRecord.toolName === 'ExitPlanMode') return;
       const { result } = approvalRecord;
       const parts: string[] = [];
       switch (result.decision) {
@@ -285,6 +288,23 @@ function projectReplayRecord(state: ProjectionState, record: AgentReplayRecord):
     }
     case 'config_updated':
       return;
+  }
+}
+
+function attachActivePlanPreview(
+  entries: TranscriptEntry[],
+  activePlan: ResumedAgentState['plan'] | undefined,
+): void {
+  if (activePlan === undefined || activePlan === null || activePlan.content.length === 0) {
+    return;
+  }
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const toolCall = entries[index]?.toolCallData;
+    if (toolCall === undefined || toolCall.name !== 'ExitPlanMode') continue;
+    const inlinePlan = toolCall.args['plan'];
+    if (typeof inlinePlan === 'string' && inlinePlan.length > 0) continue;
+    toolCall.planPreview = { content: activePlan.content, path: activePlan.path };
+    return;
   }
 }
 

@@ -3493,6 +3493,7 @@ export class KimiTUI {
 
   // Appends an approval-result entry to the transcript.
   private appendApprovalTranscriptEntry(request: ApprovalRequest, response: ApprovalResponse): void {
+    if (request.toolName === 'ExitPlanMode' || request.display.kind === 'plan_review') return;
     const parts: string[] = [];
     switch (response.decision) {
       case 'approved':

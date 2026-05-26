@@ -542,6 +542,40 @@ describe('projectReplayRecords', () => {
     );
   });
 
+  it('skips plan review approval replay records while keeping normal approvals', () => {
+    const projected = projectReplayRecords([
+      {
+        type: 'approval_result',
+        record: {
+          turnId: 0,
+          toolCallId: 'call_exit_plan',
+          action: 'Review plan',
+          toolName: 'ExitPlanMode',
+          result: {
+            decision: 'rejected',
+            selectedLabel: 'Reject',
+          },
+        },
+      },
+      {
+        type: 'approval_result',
+        record: {
+          turnId: 0,
+          toolCallId: 'call_bash',
+          action: 'run command',
+          toolName: 'Bash',
+          result: {
+            decision: 'approved',
+          },
+        },
+      },
+    ]);
+
+    expect(projected.entries.map((e) => [e.kind, e.renderMode, e.content])).toEqual([
+      ['status', 'notice', 'Approved: run command'],
+    ]);
+  });
+
   it('ignores config replay records and system injections', () => {
     const projected = projectReplayRecords([
       { type: 'config_updated', config: { thinkingLevel: 'off' } },

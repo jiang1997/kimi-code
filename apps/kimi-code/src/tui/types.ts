@@ -45,6 +45,10 @@ export interface ToolCallBlockData {
   streamingStartedAtMs?: number;
   result?: ToolResultBlockData;
   subagent?: SubagentReplayBlockData;
+  planPreview?: {
+    readonly content: string;
+    readonly path?: string;
+  };
   step?: number;
   turnId?: string;
   /** Set when the step ended (e.g. max_tokens) before the tool call's

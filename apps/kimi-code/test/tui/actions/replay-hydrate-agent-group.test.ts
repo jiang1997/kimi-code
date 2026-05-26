@@ -1,6 +1,6 @@
 
 import { Text } from '@earendil-works/pi-tui';
-import type { Session } from '@moonshot-ai/kimi-code-sdk';
+import type { AgentReplayRecord, Session } from '@moonshot-ai/kimi-code-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import { hydrateProjectedEntries, hydrateTranscriptFromReplay } from '#/tui/actions/replay-ops';
@@ -8,6 +8,15 @@ import { AgentGroupComponent } from '#/tui/components/messages/agent-group';
 import { ToolCallComponent } from '#/tui/components/messages/tool-call';
 import { createTUIState, type KimiTUIOptions, type TUIState } from '#/tui/kimi-tui';
 import type { AppState, ToolCallBlockData, TranscriptEntry } from '#/tui/types';
+
+const ESC = String.fromCodePoint(0x1b);
+const BEL = String.fromCodePoint(0x07);
+
+function strip(text: string): string {
+  return text
+    .replaceAll(/\u001B\[[0-9;]*m/g, '')
+    .replaceAll(new RegExp(`${ESC}\\]8;;[^${BEL}]*${BEL}`, 'g'), '');
+}
 
 function makeAppState(): AppState {
   return {
@@ -85,7 +94,10 @@ function setTodoList(
   }
 }
 
-function sessionWithToolStore(toolStore: Record<string, unknown>): Session {
+function sessionWithToolStore(
+  toolStore: Record<string, unknown>,
+  agentOverrides: Record<string, unknown> = {},
+): Session {
   return {
     getResumeState: () => ({
       sessionMetadata: {},
@@ -105,6 +117,7 @@ function sessionWithToolStore(toolStore: Record<string, unknown>): Session {
           tools: [],
           toolStore,
           background: [],
+          ...agentOverrides,
         },
       },
     }),
@@ -232,6 +245,78 @@ describe('hydrateProjectedEntries', () => {
     expect(ok).toBe(true);
     expect(state.todoPanel.getTodos()).toEqual([]);
     expect(state.todoPanelContainer.children).not.toContain(state.todoPanel);
+  });
+
+  it('hydrates active plan preview into rejected ExitPlanMode replay cards', async () => {
+    const state = makeTuiState();
+    const replay: AgentReplayRecord[] = [
+      {
+        type: 'message',
+        message: {
+          role: 'assistant',
+          content: [],
+          toolCalls: [
+            {
+              type: 'function',
+              id: 'call_exit_resume',
+              function: {
+                name: 'ExitPlanMode',
+                arguments: '{}',
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: 'message',
+        message: {
+          role: 'tool',
+          content: [{ type: 'text', text: 'Plan rejected by user. Plan mode remains active.' }],
+          toolCalls: [],
+          toolCallId: 'call_exit_resume',
+          isError: true,
+        },
+      },
+    ];
+    const errors: string[] = [];
+
+    const ok = await hydrateTranscriptFromReplay(
+      state,
+      {
+        setAppState: (patch) => {
+          state.appState = { ...state.appState, ...patch };
+        },
+        appendEntry: (entry) => {
+          appendEntry(state, entry);
+        },
+        setTodoList: (todos) => {
+          setTodoList(state, todos);
+        },
+        emitError: (message) => {
+          errors.push(message);
+        },
+      },
+      sessionWithToolStore(
+        {},
+        {
+          replay,
+          plan: {
+            id: 'active-plan',
+            content: '# Resume Plan\n\n- replay current active plan',
+            path: '/tmp/plans/active-plan.md',
+          },
+        },
+      ),
+    );
+
+    const transcript = strip(state.transcriptContainer.render(120).join('\n'));
+    expect(ok).toBe(true);
+    expect(errors).toEqual([]);
+    expect(transcript).toContain('plan: active-plan.md · Rejected');
+    expect(transcript).toContain('Resume Plan');
+    expect(transcript).toContain('replay current active plan');
+    expect(transcript).not.toContain('Plan rejected by user.');
+    expect(transcript).not.toContain('/tmp/plans/active-plan.md');
   });
 
   it('groups 2 adjacent same-step Agents into a single AgentGroupComponent', () => {
