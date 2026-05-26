@@ -402,8 +402,6 @@ describe('Permission auto mode', () => {
   it.each(
     (['manual', 'yolo'] as const).flatMap((mode) =>
       [
-        [mode, 'Read', { path: '/tmp/notes.md' }, 'read', 'read file'],
-        [mode, 'ReadMediaFile', { path: '/tmp/image.png' }, 'read', 'read media file'],
         [mode, 'Write', { path: '/tmp/notes.md', content: 'x' }, 'write', 'write file'],
         [mode, 'Edit', { path: '/tmp/notes.md', old_string: 'a', new_string: 'b' }, 'edit', 'edit file'],
       ] as const,
@@ -432,6 +430,30 @@ describe('Permission auto mode', () => {
         }),
         expect.any(Object),
       );
+    },
+  );
+
+  it.each(
+    (['manual', 'yolo'] as const).flatMap((mode) =>
+      [
+        [mode, 'Read', { path: '/tmp/notes.md' }],
+        [mode, 'ReadMediaFile', { path: '/tmp/image.png' }],
+        [mode, 'Grep', { pattern: 'TODO', path: '/tmp' }],
+      ] as const,
+    ),
+  )(
+    'does not ask in %s mode for %s outside the cwd (read/search are not write)',
+    async (mode, toolName, args) => {
+      const { manager, requestApproval } = makePermissionManager(async () => ({
+        decision: 'approved',
+      }));
+      manager.setMode(mode);
+
+      await expect(
+        manager.beforeToolCall(hookContext({ id: `call_${toolName}_${mode}`, toolName, args })),
+      ).resolves.toBeUndefined();
+
+      expect(requestApproval).not.toHaveBeenCalled();
     },
   );
 
@@ -481,35 +503,6 @@ describe('Permission auto mode', () => {
       ).resolves.toBeUndefined();
 
       expect(requestApproval).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(['manual', 'yolo'] as const)(
-    'requests approval for Grep search outside the cwd in %s mode',
-    async (mode) => {
-      const { manager, requestApproval } = makePermissionManager(async () => ({
-        decision: 'approved',
-      }));
-      manager.setMode(mode);
-
-      await expect(
-        manager.beforeToolCall(
-          hookContext({
-            id: `call_grep_${mode}`,
-            toolName: 'Grep',
-            args: { pattern: 'TODO', path: '/tmp' },
-          }),
-        ),
-      ).resolves.toBeUndefined();
-
-      expect(requestApproval).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: 'Grep',
-          action: "Searching for 'TODO' in /tmp",
-          display: { kind: 'file_io', operation: 'grep', path: '/tmp' },
-        }),
-        expect.any(Object),
-      );
     },
   );
 
@@ -640,7 +633,7 @@ describe('Permission auto mode', () => {
     );
   });
 
-  it('reuses approve-for-session for repeated outside-workspace reads in yolo mode', async () => {
+  it('reuses approve-for-session for repeated outside-workspace writes in yolo mode', async () => {
     const { manager, requestApproval } = makePermissionManager(async () => ({
       decision: 'approved',
       scope: 'session',
@@ -650,9 +643,9 @@ describe('Permission auto mode', () => {
     const call = () =>
       manager.beforeToolCall(
         hookContext({
-          id: 'call_read_session',
-          toolName: 'Read',
-          args: { path: '/tmp/notes.md' },
+          id: 'call_write_session',
+          toolName: 'Write',
+          args: { path: '/tmp/notes.md', content: 'x' },
         }),
       );
 
@@ -660,7 +653,7 @@ describe('Permission auto mode', () => {
     await expect(call()).resolves.toBeUndefined();
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
-    expect(manager.sessionApprovalRulePatterns).toEqual(['Read(/tmp/notes.md)']);
+    expect(manager.sessionApprovalRulePatterns).toEqual(['Write(/tmp/notes.md)']);
     expect(manager.data().rules).toEqual([]);
   });
 });
@@ -680,7 +673,7 @@ describe('Permission policy chain', () => {
       'plan-mode-tool-approve',
       'sensitive-file-access-ask',
       'git-control-path-access-ask',
-      'cwd-outside-file-access-ask',
+      'cwd-outside-file-write-ask',
       'yolo-mode-approve',
       'default-tool-approve',
       'git-cwd-write-approve',
