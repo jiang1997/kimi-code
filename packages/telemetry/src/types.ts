@@ -1,4 +1,4 @@
-export type TelemetryPrimitive = boolean | number | string | null;
+export type TelemetryPrimitive = boolean | number | string | undefined | null;
 export type TelemetryProperties = Record<string, TelemetryPrimitive>;
 export type TelemetryContext = Record<string, TelemetryPrimitive>;
 
