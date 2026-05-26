@@ -3,4 +3,4 @@
 "@moonshot-ai/kimi-code": minor
 ---
 
-Rework tool permission decisions around resolved execution metadata, with exact-argument session approvals and centralized permission telemetry.
+Rework tool permissions: reads outside cwd no longer prompt, session approvals match the exact call, and path-based rules are case-insensitive.
