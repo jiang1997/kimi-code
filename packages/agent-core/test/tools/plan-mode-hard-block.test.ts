@@ -52,11 +52,12 @@ function policyContext(
   toolName: string,
   args: unknown,
   _mode: PermissionMode = 'manual',
+  accesses = toolAccesses(toolName, args),
 ): PermissionPolicyContext {
   return {
     ...hookContext(toolName, args),
     execution: {
-      accesses: toolAccesses(toolName, args),
+      accesses,
       approvalRule: toolName,
       execute: async () => ({ output: '' }),
     },
@@ -125,6 +126,87 @@ describe('Plan mode permission policy', () => {
     const deny = expectDeny(result);
     expect(deny.message ?? '').toContain('(no plan file selected yet)');
     expect(deny.message ?? '').toContain('ExitPlanMode');
+  });
+
+  it('blocks file writes when plan mode has no selected plan file path', async () => {
+    const { agent, planMode } = await activePlanAgent();
+    (planMode as unknown as { _planFilePath: string | null })._planFilePath = null;
+
+    const result = evaluatePlanPolicy(agent, 'Write', {
+      path: '/workspace/src/other.ts',
+      content: 'x',
+    });
+
+    const deny = expectDeny(result);
+    expect(deny.message ?? '').toContain('(no plan file selected yet)');
+    expect(deny.message ?? '').toContain('ExitPlanMode');
+  });
+
+  it('blocks Write and Edit with no file write access while plan mode is active', async () => {
+    const { agent } = await activePlanAgent();
+
+    const write = new PlanModeGuardDenyPermissionPolicy(agent).evaluate(
+      policyContext('Write', { content: 'x' }, 'manual', ToolAccesses.none()),
+    );
+    const edit = new PlanModeGuardDenyPermissionPolicy(agent).evaluate(
+      policyContext(
+        'Edit',
+        { old_string: 'A', new_string: 'B' },
+        'manual',
+        ToolAccesses.none(),
+      ),
+    );
+
+    expectDeny(write);
+    expectDeny(edit);
+  });
+
+  it('allows multiple writes when every write access targets the active plan file', async () => {
+    const { agent, planMode } = await activePlanAgent();
+    const planPath = planMode.planFilePath;
+    if (planPath === null) throw new Error('expected plan path');
+
+    const result = new PlanModeGuardDenyPermissionPolicy(agent).evaluate(
+      policyContext(
+        'Write',
+        { path: planPath, content: 'x' },
+        'manual',
+        [
+          { kind: 'file', operation: 'write', path: planPath },
+          { kind: 'file', operation: 'readwrite', path: planPath },
+        ],
+      ),
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it('blocks mixed plan-file and non-plan-file write accesses', async () => {
+    const { agent, planMode } = await activePlanAgent();
+    const planPath = planMode.planFilePath;
+    if (planPath === null) throw new Error('expected plan path');
+
+    const result = new PlanModeGuardDenyPermissionPolicy(agent).evaluate(
+      policyContext(
+        'Edit',
+        { path: planPath, old_string: 'A', new_string: 'B' },
+        'manual',
+        [
+          { kind: 'file', operation: 'readwrite', path: planPath },
+          { kind: 'file', operation: 'write', path: '/workspace/src/main.ts' },
+        ],
+      ),
+    );
+
+    const deny = expectDeny(result);
+    expect(deny.message ?? '').toContain('current plan file');
+  });
+
+  it('does not block read-only tools while plan mode is active', async () => {
+    const { agent } = await activePlanAgent();
+
+    expect(evaluatePlanPolicy(agent, 'Read', { path: '/workspace/src/main.ts' })).toBeUndefined();
+    expect(evaluatePlanPolicy(agent, 'Grep', { pattern: 'TODO', path: '/workspace' })).toBeUndefined();
   });
 
   it.each(['manual', 'yolo', 'auto'] as const)(

@@ -17,7 +17,11 @@ import {
   parsePattern,
   type PermissionRuleMatchExecution,
 } from '../../src/agent/permission/matches-rule';
+import { AutoModeApprovePermissionPolicy } from '../../src/agent/permission/policies/auto-mode-approve';
+import { AutoModeAskUserQuestionDenyPermissionPolicy } from '../../src/agent/permission/policies/auto-mode-ask-user-question-deny';
+import { FallbackAskPermissionPolicy } from '../../src/agent/permission/policies/fallback-ask';
 import { createPermissionDecisionPolicies } from '../../src/agent/permission/policies';
+import { YoloModeApprovePermissionPolicy } from '../../src/agent/permission/policies/yolo-mode-approve';
 import { ToolAccesses } from '../../src/loop';
 import type { ToolInputDisplay } from '../../src/tools/display';
 import {
@@ -683,6 +687,281 @@ describe('Permission policy chain', () => {
 
 });
 
+describe('Simple permission policy direct behavior', () => {
+  it('approves only in auto mode for AutoModeApprovePermissionPolicy', () => {
+    const agent = { permission: { mode: 'manual' } } as unknown as Agent;
+    const policy = new AutoModeApprovePermissionPolicy(agent);
+
+    expect(policy.evaluate()).toBeUndefined();
+    Object.assign(agent.permission, { mode: 'auto' });
+    expect(policy.evaluate()).toEqual({ kind: 'approve' });
+  });
+
+  it('denies AskUserQuestion only in auto mode', () => {
+    const agent = { permission: { mode: 'manual' } } as unknown as Agent;
+    const policy = new AutoModeAskUserQuestionDenyPermissionPolicy(agent);
+
+    expect(
+      policy.evaluate(
+        hookContext({
+          id: 'call_question_manual',
+          toolName: 'AskUserQuestion',
+          args: { questions: [] },
+        }),
+      ),
+    ).toBeUndefined();
+
+    Object.assign(agent.permission, { mode: 'auto' });
+    expect(
+      policy.evaluate(
+        hookContext({
+          id: 'call_question_auto',
+          toolName: 'AskUserQuestion',
+          args: { questions: [] },
+        }),
+      ),
+    ).toMatchObject({ kind: 'deny' });
+    expect(
+      policy.evaluate(
+        hookContext({
+          id: 'call_bash_auto',
+          toolName: 'Bash',
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('approves only in yolo mode for YoloModeApprovePermissionPolicy', () => {
+    const agent = { permission: { mode: 'manual' } } as unknown as Agent;
+    const policy = new YoloModeApprovePermissionPolicy(agent);
+
+    expect(policy.evaluate()).toBeUndefined();
+    Object.assign(agent.permission, { mode: 'yolo' });
+    expect(policy.evaluate()).toEqual({ kind: 'approve' });
+  });
+
+  it('always asks in FallbackAskPermissionPolicy', () => {
+    const policy = new FallbackAskPermissionPolicy();
+
+    expect(policy.evaluate(hookContext({ id: 'call_fallback_direct' }))).toEqual({ kind: 'ask' });
+  });
+});
+
+describe('PreToolUse permission policy', () => {
+  it('blocks before approval and records the hook policy decision', async () => {
+    const triggerBlock = vi.fn(async () => ({
+      block: true,
+      reason: 'blocked by hook',
+    }));
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { hooks: { triggerBlock } as unknown as Agent['hooks'] },
+    );
+
+    await expect(manager.beforeToolCall(hookContext({ id: 'call_hook_block' }))).resolves
+      .toMatchObject({
+        block: true,
+        reason: 'blocked by hook',
+      });
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(triggerBlock).toHaveBeenCalledWith('PreToolUse', {
+      matcherValue: 'Bash',
+      signal: expect.any(AbortSignal),
+      inputData: {
+        toolName: 'Bash',
+        toolInput: { command: 'printf first', timeout: 60 },
+        toolCallId: 'call_hook_block',
+      },
+    });
+    expect(telemetryTrack).toHaveBeenCalledWith('permission_policy_decision', {
+      policy_name: 'pre-tool-call-hook',
+      tool_name: 'Bash',
+      permission_mode: 'manual',
+      decision: 'deny',
+    });
+  });
+
+  it.each(['auto', 'yolo'] as const)('runs before %s mode bypass', async (mode) => {
+    const triggerBlock = vi.fn(async () => ({
+      block: true,
+      reason: `${mode} hook block`,
+    }));
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { hooks: { triggerBlock } as unknown as Agent['hooks'] },
+    );
+    manager.setMode(mode);
+
+    await expect(manager.beforeToolCall(hookContext({ id: `call_hook_${mode}` }))).resolves
+      .toMatchObject({
+        block: true,
+        reason: `${mode} hook block`,
+      });
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'pre-tool-call-hook',
+        permission_mode: mode,
+        decision: 'deny',
+      }),
+    );
+  });
+
+  it('continues through later policies when the hook does not block', async () => {
+    const triggerBlock = vi.fn(async () => undefined);
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { hooks: { triggerBlock } as unknown as Agent['hooks'] },
+    );
+
+    await expect(manager.beforeToolCall(hookContext({ id: 'call_hook_allow' }))).resolves
+      .toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+        tool_name: 'Bash',
+        decision: 'ask',
+      }),
+    );
+  });
+
+  it('passes an empty hook input object for non-plain arguments', async () => {
+    const triggerBlock = vi.fn(async () => ({
+      block: true,
+      reason: 'array args blocked',
+    }));
+    const { manager } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { hooks: { triggerBlock } as unknown as Agent['hooks'] },
+    );
+
+    await manager.beforeToolCall(
+      hookContext({
+        id: 'call_array_args',
+        toolName: 'Custom',
+        args: [] as unknown as Record<string, unknown>,
+      }),
+    );
+
+    expect(triggerBlock).toHaveBeenCalledWith(
+      'PreToolUse',
+      expect.objectContaining({
+        inputData: {
+          toolName: 'Custom',
+          toolInput: {},
+          toolCallId: 'call_array_args',
+        },
+      }),
+    );
+  });
+});
+
+describe('Default tool approve policy', () => {
+  it.each([
+    ['Read', { path: '/workspace/notes.md' }],
+    ['Grep', { pattern: 'TODO', path: '/workspace' }],
+    ['Glob', { pattern: '**/*.ts', path: '/workspace' }],
+    ['ReadMediaFile', { path: '/workspace/image.png' }],
+    ['SetTodoList', { items: [] }],
+    ['TodoList', {}],
+    ['TaskList', {}],
+    ['TaskOutput', { task_id: 'task_1' }],
+    ['WebSearch', { query: 'kimi code' }],
+    ['FetchURL', { url: 'https://example.com' }],
+    ['Agent', { prompt: 'review this' }],
+    ['AskUserQuestion', { questions: [] }],
+    ['Skill', { name: 'test-skill' }],
+  ] as const)('approves %s in manual mode without requesting approval', async (toolName, args) => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: `call_default_${toolName}`,
+          toolName,
+          args,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'default-tool-approve',
+        tool_name: toolName,
+        permission_mode: 'manual',
+        decision: 'approve',
+      }),
+    );
+  });
+
+  it.each([
+    ['Bash', { command: 'printf first', timeout: 60 }],
+    ['Write', { path: '/workspace/a.ts', content: 'x' }],
+    ['Edit', { path: '/workspace/a.ts', old_string: 'a', new_string: 'b' }],
+    ['Custom', { value: 1 }],
+  ] as const)('does not default-approve %s', async (toolName, args) => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: `call_not_default_${toolName}`,
+          toolName,
+          args,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).not.toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'default-tool-approve' }),
+    );
+  });
+
+  it('keeps auto-mode AskUserQuestion deny above default approval', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.setMode('auto');
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_auto_question_default',
+          toolName: 'AskUserQuestion',
+          args: { questions: [] },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      block: true,
+      reason: expect.stringContaining('AskUserQuestion is disabled'),
+    });
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'auto-mode-ask-user-question-deny',
+        tool_name: 'AskUserQuestion',
+        decision: 'deny',
+      }),
+    );
+  });
+});
+
 describe('Permission live derive', () => {
   it('derives parent mode until the child records a local mode', () => {
     const parent = makePermissionManager(async () => ({ decision: 'approved' }));
@@ -809,6 +1088,482 @@ describe('Permission live derive', () => {
     await expect(child.manager.beforeToolCall(hookContext({ id: 'call_local_manual' }))).resolves
       .toBeUndefined();
     expect(child.requestApproval).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('User-configured permission policies', () => {
+  it('denies with argument-aware matching and ignores non-matching arguments', async () => {
+    const denied = makePermissionManager(async () => ({ decision: 'approved' }));
+    denied.manager.rules.push({
+      decision: 'deny',
+      scope: 'user',
+      pattern: 'Bash(git *)',
+      reason: 'git is blocked',
+    });
+
+    await expect(
+      denied.manager.beforeToolCall(
+        hookContext({
+          id: 'call_git_denied',
+          args: { command: 'git status', timeout: 60 },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      block: true,
+      reason: 'Tool "Bash" was denied by permission rule. Reason: git is blocked',
+    });
+    expect(denied.requestApproval).not.toHaveBeenCalled();
+
+    const allowed = makePermissionManager(async () => ({ decision: 'approved' }));
+    allowed.manager.rules.push({
+      decision: 'deny',
+      scope: 'user',
+      pattern: 'Bash(git *)',
+      reason: 'git is blocked',
+    });
+
+    await expect(
+      allowed.manager.beforeToolCall(
+        hookContext({
+          id: 'call_npm_not_denied',
+          args: { command: 'npm test', timeout: 60 },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(allowed.requestApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [{ reason: undefined }, 'Tool "Bash" was denied by permission rule.'],
+    [{ reason: '' }, 'Tool "Bash" was denied by permission rule.'],
+  ] as const)('formats deny messages without an empty reason suffix', async (rule, message) => {
+    const { manager } = makePermissionManager(async () => ({ decision: 'approved' }));
+    manager.rules.push({
+      decision: 'deny',
+      scope: 'user',
+      pattern: 'Bash',
+      reason: rule.reason,
+    });
+
+    await expect(manager.beforeToolCall(hookContext({ id: 'call_deny_reason' }))).resolves
+      .toMatchObject({
+        block: true,
+        reason: message,
+      });
+  });
+
+  it('continues past malformed user rule patterns', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.rules.push({
+      decision: 'deny',
+      scope: 'user',
+      pattern: 'Bash(git *',
+      reason: 'malformed rule',
+    });
+
+    await expect(manager.beforeToolCall(hookContext({ id: 'call_bad_rule' }))).resolves
+      .toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+        decision: 'ask',
+      }),
+    );
+  });
+
+  it('uses the first matching deny rule in effective order', async () => {
+    const { manager } = makePermissionManager(async () => ({ decision: 'approved' }));
+    manager.rules.push(
+      {
+        decision: 'deny',
+        scope: 'project',
+        pattern: 'Bash(git *)',
+        reason: 'project deny',
+      },
+      {
+        decision: 'deny',
+        scope: 'user',
+        pattern: 'Bash(git status)',
+        reason: 'user deny',
+      },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_first_deny',
+          args: { command: 'git status', timeout: 60 },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      block: true,
+      reason: 'Tool "Bash" was denied by permission rule. Reason: project deny',
+    });
+  });
+
+  it('adds sub-agent guidance to user-configured deny messages', async () => {
+    const { manager } = makePermissionManager(async () => ({ decision: 'approved' }), {
+      agentType: 'sub',
+    });
+    manager.rules.push({
+      decision: 'deny',
+      scope: 'user',
+      pattern: 'Bash',
+      reason: 'blocked by parent',
+    });
+
+    await expect(manager.beforeToolCall(hookContext({ id: 'call_sub_deny' }))).resolves
+      .toMatchObject({
+        block: true,
+        reason: expect.stringContaining("don't retry the same call"),
+      });
+  });
+
+  it('requests approval for argument-aware ask rules and records non-sensitive match telemetry', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.rules.push({
+      decision: 'ask',
+      scope: 'user',
+      pattern: 'Bash(git *)',
+    });
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_ask_git',
+          args: { command: 'git status', timeout: 60 },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'user-configured-ask',
+        rule_decision: 'ask',
+        has_rule_args: true,
+        match_strategy: 'matches_rule',
+      }),
+    );
+  });
+
+  it('lets non-matching ask rules fall through to matching allow rules', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.rules.push(
+      {
+        decision: 'ask',
+        scope: 'user',
+        pattern: 'Bash(git *)',
+      },
+      {
+        decision: 'allow',
+        scope: 'user',
+        pattern: 'Bash(npm *)',
+      },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_allow_npm',
+          args: { command: 'npm test', timeout: 60 },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'user-configured-allow',
+        rule_decision: 'allow',
+        has_rule_args: true,
+        match_strategy: 'matches_rule',
+      }),
+    );
+  });
+
+  it('falls back to approval when an allow rule argument does not match', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.rules.push({
+      decision: 'allow',
+      scope: 'user',
+      pattern: 'Bash(git *)',
+    });
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_allow_miss',
+          args: { command: 'npm test', timeout: 60 },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+      }),
+    );
+  });
+
+  it.each(['turn-override', 'project', 'user'] as const)(
+    'matches %s scoped user-configured rules',
+    async (scope) => {
+      const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+        decision: 'approved',
+      }));
+      manager.rules.push({
+        decision: 'allow',
+        scope,
+        pattern: 'Bash',
+      });
+
+      await expect(manager.beforeToolCall(hookContext({ id: `call_scope_${scope}` }))).resolves
+        .toBeUndefined();
+
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(telemetryTrack).toHaveBeenCalledWith(
+        'permission_policy_decision',
+        expect.objectContaining({
+          policy_name: 'user-configured-allow',
+          rule_decision: 'allow',
+        }),
+      );
+    },
+  );
+});
+
+describe('Plan mode tool approve policy', () => {
+  it('approves EnterPlanMode in manual mode without requesting approval', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_enter_plan',
+          toolName: 'EnterPlanMode',
+          args: {},
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'plan-mode-tool-approve',
+        tool_name: 'EnterPlanMode',
+        decision: 'approve',
+      }),
+    );
+  });
+
+  it.each(['Write', 'Edit'] as const)(
+    'approves %s when it only writes the active plan file',
+    async (toolName) => {
+      const planFilePath = '/workspace/.kimi/plans/current.md';
+      const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+        async () => ({ decision: 'approved' }),
+        { planModeActive: true, planFilePath },
+      );
+      const args =
+        toolName === 'Write'
+          ? { path: planFilePath, content: '# Plan' }
+          : { path: planFilePath, old_string: '# Draft', new_string: '# Plan' };
+
+      await expect(
+        manager.beforeToolCall(
+          hookContext({
+            id: `call_${toolName}_plan_approve`,
+            toolName,
+            args,
+          }),
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(telemetryTrack).toHaveBeenCalledWith(
+        'permission_policy_decision',
+        expect.objectContaining({
+          policy_name: 'plan-mode-tool-approve',
+          tool_name: toolName,
+          decision: 'approve',
+        }),
+      );
+    },
+  );
+
+  it('denies active plan-mode writes that have no file write access', async () => {
+    const planFilePath = '/workspace/.kimi/plans/current.md';
+    const args = { path: planFilePath, content: '# Plan' };
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { planModeActive: true, planFilePath },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_write_no_access',
+          toolName: 'Write',
+          args,
+          execution: {
+            ...testExecution('Write', args),
+            accesses: ToolAccesses.none(),
+          },
+        }),
+      ),
+    ).resolves.toMatchObject({
+      block: true,
+      reason: expect.stringContaining('Plan mode is active'),
+    });
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'plan-mode-guard-deny',
+        tool_name: 'Write',
+        decision: 'deny',
+      }),
+    );
+  });
+
+  it('approves ExitPlanMode directly when plan mode is inactive', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_exit_inactive',
+          toolName: 'ExitPlanMode',
+          args: {},
+          execution: planReviewExecution({ plan: '# Plan', path: '/tmp/plan.md' }),
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'plan-mode-tool-approve',
+        tool_name: 'ExitPlanMode',
+        decision: 'approve',
+      }),
+    );
+  });
+
+  it('approves ExitPlanMode while active when there is no plan review display', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { planModeActive: true, planFilePath: '/tmp/plan.md' },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_exit_generic_display',
+          toolName: 'ExitPlanMode',
+          args: {},
+          execution: {
+            ...testExecution('ExitPlanMode', {}),
+            display: genericDisplay(),
+            approvalRule: 'ExitPlanMode',
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'plan-mode-tool-approve',
+        tool_name: 'ExitPlanMode',
+        decision: 'approve',
+      }),
+    );
+  });
+
+  it('approves ExitPlanMode while active when the plan review is blank', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { planModeActive: true, planFilePath: '/tmp/plan.md' },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_exit_blank_plan',
+          toolName: 'ExitPlanMode',
+          args: {},
+          execution: planReviewExecution({ plan: '  \n\t', path: '/tmp/plan.md' }),
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'plan-mode-tool-approve',
+        tool_name: 'ExitPlanMode',
+        decision: 'approve',
+      }),
+    );
+  });
+
+  it('defers non-empty plan reviews to the review approval policy', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { planModeActive: true, planFilePath: '/tmp/plan.md' },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_exit_review',
+          toolName: 'ExitPlanMode',
+          args: {},
+          execution: planReviewExecution({ plan: '# Plan', path: '/tmp/plan.md' }),
+        }),
+      ),
+    ).resolves.toMatchObject({
+      syntheticResult: {
+        isError: false,
+        output: expect.stringContaining('Exited plan mode.'),
+      },
+    });
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'exit-plan-mode-review-ask',
+        tool_name: 'ExitPlanMode',
+        decision: 'ask',
+      }),
+    );
   });
 });
 
@@ -1103,6 +1858,113 @@ describe('ExitPlanMode permission policy', () => {
       },
     });
   });
+
+  it('returns approved plan output without a saved-to line when display has no path', async () => {
+    const { manager } = makePlanPermissionManager({
+      mode: 'manual',
+      plan: '# Draft Plan',
+      approval: { decision: 'approved' },
+    });
+
+    const result = await manager.beforeToolCall(
+      hookContext({
+        id: 'call_exit_no_path',
+        toolName: 'ExitPlanMode',
+        args: {},
+        execution: planReviewExecution({ plan: '# Draft Plan' }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      syntheticResult: {
+        isError: false,
+        output: expect.stringContaining('## Approved Plan:\n# Draft Plan'),
+      },
+    });
+    expect(result?.syntheticResult?.output).not.toContain('Plan saved to:');
+  });
+
+  it('does not force a selected-approach prefix for labels that are not in the options', async () => {
+    const { manager, telemetryTrack } = makePlanPermissionManager({
+      mode: 'manual',
+      plan: '# Draft Plan',
+      approval: { decision: 'approved', selectedLabel: 'Approach C' },
+    });
+
+    const result = await manager.beforeToolCall(
+      hookContext({
+        id: 'call_exit_unknown_option',
+        toolName: 'ExitPlanMode',
+        args: { options: planOptions },
+        execution: planReviewExecution({
+          plan: '# Draft Plan',
+          path: '/tmp/plan.md',
+          options: planOptions,
+        }),
+      }),
+    );
+
+    expect(result?.syntheticResult?.output).not.toContain('Selected approach:');
+    expect(telemetryTrack).toHaveBeenCalledWith('plan_resolved', {
+      outcome: 'approved',
+      chosen_option: 'Approach C',
+    });
+  });
+
+  it('returns the exit failure when reject-and-exit cannot leave plan mode', async () => {
+    const { manager, exit } = makePlanPermissionManager({
+      mode: 'manual',
+      plan: '# Draft Plan',
+      approval: { decision: 'rejected', selectedLabel: 'Reject and Exit' },
+    });
+    exit.mockImplementation(() => {
+      throw new Error('state transition failure');
+    });
+
+    const result = await manager.beforeToolCall(
+      hookContext({
+        id: 'call_exit_reject_exit_failure',
+        toolName: 'ExitPlanMode',
+        args: {},
+        execution: planReviewExecution({ plan: '# Draft Plan', path: '/tmp/plan.md' }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      syntheticResult: {
+        isError: true,
+        output: 'Failed to exit plan mode: state transition failure',
+      },
+    });
+  });
+
+  it('tracks approval transport errors before rethrowing', async () => {
+    const { manager, telemetryTrack } = makePlanPermissionManager({
+      mode: 'manual',
+      plan: '# Draft Plan',
+      approvalError: new Error('approval transport closed'),
+    });
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_exit_approval_error',
+          toolName: 'ExitPlanMode',
+          args: {},
+          execution: planReviewExecution({ plan: '# Draft Plan', path: '/tmp/plan.md' }),
+        }),
+      ),
+    ).rejects.toThrow('approval transport closed');
+
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_approval_result',
+      expect.objectContaining({
+        policy_name: 'exit-plan-mode-review-ask',
+        tool_name: 'ExitPlanMode',
+        result: 'error',
+      }),
+    );
+  });
 });
 
 describe('Agent-local approve for session', () => {
@@ -1307,6 +2169,77 @@ describe('Agent-local approve for session', () => {
       reason: 'Tool "Bash" was denied by permission rule. Reason: blocked by test',
     });
     expect(requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('continues across non-matching and malformed session approval patterns', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.recordApprovalResult({
+      turnId: 0,
+      toolCallId: 'call_bad_session',
+      toolName: 'Bash',
+      action: 'run command',
+      sessionApprovalRule: 'Bash(unterminated',
+      result: { decision: 'approved', scope: 'session' },
+    });
+    manager.recordApprovalResult({
+      turnId: 0,
+      toolCallId: 'call_other_session',
+      toolName: 'Custom',
+      action: 'call custom',
+      sessionApprovalRule: 'Custom',
+      result: { decision: 'approved', scope: 'session' },
+    });
+    manager.recordApprovalResult({
+      turnId: 0,
+      toolCallId: 'call_matching_session',
+      toolName: 'Bash',
+      action: 'run command',
+      sessionApprovalRule: 'Bash(printf first)',
+      result: { decision: 'approved', scope: 'session' },
+    });
+
+    await expect(manager.beforeToolCall(hookContext({ id: 'call_session_match_late' }))).resolves
+      .toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'session-approval-history',
+        tool_name: 'Bash',
+        decision: 'approve',
+        has_rule_args: true,
+        match_strategy: 'matches_rule',
+      }),
+    );
+  });
+
+  it('does not reuse a session approval whose tool name does not match', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+    manager.recordApprovalResult({
+      turnId: 0,
+      toolCallId: 'call_custom_session',
+      toolName: 'Custom',
+      action: 'call custom',
+      sessionApprovalRule: 'Custom',
+      result: { decision: 'approved', scope: 'session' },
+    });
+
+    await expect(manager.beforeToolCall(hookContext({ id: 'call_bash_no_session' }))).resolves
+      .toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'fallback-ask',
+        tool_name: 'Bash',
+      }),
+    );
   });
 
   it('replays session approval wire events into agent permission state', () => {
@@ -1692,6 +2625,115 @@ describe('Default git CWD Write/Edit permission', () => {
     );
   });
 
+  it('does not ask for ordinary file access when a git marker exists', async () => {
+    const { kaos } = gitKaos();
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_read_regular_git_cwd',
+          toolName: 'Read',
+          args: { path: '/workspace/src/a.ts' },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'default-tool-approve' }),
+    );
+  });
+
+  it('asks before accessing the .git marker path itself', async () => {
+    const { kaos } = gitKaos();
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_read_dot_git',
+          toolName: 'Read',
+          args: { path: '/workspace/.git' },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'git-control-path-access-ask',
+        tool_name: 'Read',
+        decision: 'ask',
+        git_control_path: true,
+      }),
+    );
+  });
+
+  it('does not check git control paths when cwd is empty', async () => {
+    const { kaos } = gitKaos();
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { cwd: '', kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_empty_cwd_git',
+          toolName: 'Read',
+          args: { path: '/workspace/.git/config' },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'default-tool-approve' }),
+    );
+  });
+
+  it('detects Win32 .git path components case-insensitively', async () => {
+    const kaos = createFakeKaos({ pathClass: () => 'win32' });
+    const args = { path: 'C:\\repo\\.GIT\\config' };
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { cwd: 'C:\\repo', kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_win_git',
+          toolName: 'Read',
+          args,
+          execution: {
+            ...testExecution('Read', args),
+            accesses: ToolAccesses.readFile('C:\\repo\\.GIT\\config'),
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'git-control-path-access-ask',
+        git_control_path: true,
+      }),
+    );
+  });
+
   it.each([
     [
       'Read',
@@ -1823,6 +2865,89 @@ describe('Default git CWD Write/Edit permission', () => {
       );
     },
   );
+
+  it.each(['src/config.ts', '.env.example', '.env.sample', '.env.template', 'id_rsa.pub'])(
+    'does not treat non-sensitive or exempt file %s as sensitive',
+    async (path) => {
+      const { kaos } = gitKaos({
+        statModes: path.includes('/') ? { '/workspace/src': DIR_MODE } : {},
+      });
+      const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+        async () => ({ decision: 'approved' }),
+        { kaos },
+      );
+
+      await expect(manager.beforeToolCall(writeHook({ path, content: 'x' }))).resolves
+        .toBeUndefined();
+
+      expect(requestApproval).not.toHaveBeenCalled();
+      expect(telemetryTrack).not.toHaveBeenCalledWith(
+        'permission_policy_decision',
+        expect.objectContaining({ policy_name: 'sensitive-file-access-ask' }),
+      );
+      expect(telemetryTrack).toHaveBeenCalledWith(
+        'permission_policy_decision',
+        expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
+      );
+    },
+  );
+
+  it('requests approval for sensitive read access before default approval', async () => {
+    const { kaos } = gitKaos();
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_read_env',
+          toolName: 'Read',
+          args: { path: '.env' },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'sensitive-file-access-ask',
+        tool_name: 'Read',
+        decision: 'ask',
+        file_access_operation: 'read',
+        sensitive_path: true,
+      }),
+    );
+  });
+
+  it('detects sensitive Win32 paths case-insensitively', async () => {
+    const kaos = createFakeKaos({ pathClass: () => 'win32' });
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { cwd: 'C:\\repo', kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_win_credentials',
+          toolName: 'Read',
+          args: { path: 'C:\\repo\\.AWS\\Credentials' },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'sensitive-file-access-ask',
+        sensitive_path: true,
+      }),
+    );
+  });
 
   it('bypasses approval for new files when SSH Kaos reports numeric no-such-file', async () => {
     const { kaos } = gitKaos({ missingError: sshNotFound });
@@ -1974,6 +3099,149 @@ describe('Default git CWD Write/Edit permission', () => {
     );
   });
 
+  it('does not approve when cwd is empty', async () => {
+    const { kaos } = gitKaos();
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { cwd: '', kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(writeHook({ path: 'src/a.ts', content: 'x' })),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).not.toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
+    );
+  });
+
+  it('does not approve Write when execution has no write file access', async () => {
+    const { kaos } = gitKaos();
+    const args = { path: 'src/a.ts', content: 'x' };
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_write_no_file_access',
+          toolName: 'Write',
+          args,
+          execution: {
+            ...testExecution('Write', args),
+            accesses: ToolAccesses.none(),
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).not.toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
+    );
+  });
+
+  it('approves multiple write accesses when all are inside the git cwd', async () => {
+    const { kaos } = gitKaos();
+    const args = { path: 'src/a.ts', content: 'x' };
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_multi_inside_write',
+          toolName: 'Write',
+          args,
+          execution: {
+            ...testExecution('Write', args),
+            accesses: [
+              { kind: 'file', operation: 'write', path: '/workspace/src/a.ts' },
+              { kind: 'file', operation: 'readwrite', path: '/workspace/src/b.ts' },
+            ],
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
+    );
+  });
+
+  it('does not approve when any write access is outside the cwd', async () => {
+    const { kaos } = gitKaos();
+    const args = { path: 'src/a.ts', content: 'x' };
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_multi_outside_write',
+          toolName: 'Write',
+          args,
+          execution: {
+            ...testExecution('Write', args),
+            accesses: [
+              { kind: 'file', operation: 'write', path: '/workspace/src/a.ts' },
+              { kind: 'file', operation: 'write', path: '/tmp/outside.ts' },
+            ],
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'cwd-outside-file-write-ask' }),
+    );
+    expect(telemetryTrack).not.toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
+    );
+  });
+
+  it('does not approve non-Write/Edit tools even if they report write access', async () => {
+    const { kaos } = gitKaos();
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_custom_write_access',
+          toolName: 'Custom',
+          args: {},
+          execution: {
+            ...testExecution('Custom', {}),
+            accesses: ToolAccesses.writeFile('/workspace/src/a.ts'),
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).not.toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'git-cwd-write-approve' }),
+    );
+  });
+
   it('rechecks git marker hits across repeated Write/Edit calls in the same cwd', async () => {
     const { kaos, stat } = gitKaos();
     const { manager, requestApproval } = makePermissionManager(
@@ -1991,6 +3259,146 @@ describe('Default git CWD Write/Edit permission', () => {
     expect(requestApproval).not.toHaveBeenCalled();
     const markerCalls = stat.mock.calls.filter(([path]) => path === '/workspace/.git');
     expect(markerCalls).toHaveLength(4);
+  });
+});
+
+describe('CWD outside file write permission policy', () => {
+  it('falls through when cwd is empty', async () => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { cwd: '' },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_empty_cwd_write',
+          toolName: 'Write',
+          args: { path: '/tmp/outside.ts', content: 'x' },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'fallback-ask' }),
+    );
+  });
+
+  it('falls through when there are no file write accesses', async () => {
+    const args = { path: '/tmp/outside.ts', content: 'x' };
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_no_write_accesses',
+          toolName: 'Write',
+          args,
+          execution: {
+            ...testExecution('Write', args),
+            accesses: ToolAccesses.none(),
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'fallback-ask' }),
+    );
+  });
+
+  it('asks when any write access is outside the cwd', async () => {
+    const args = { path: '/workspace/src/a.ts', content: 'x' };
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_mixed_write_accesses',
+          toolName: 'Write',
+          args,
+          execution: {
+            ...testExecution('Write', args),
+            accesses: [
+              { kind: 'file', operation: 'write', path: '/workspace/src/a.ts' },
+              { kind: 'file', operation: 'readwrite', path: '/tmp/outside.ts' },
+            ],
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({
+        policy_name: 'cwd-outside-file-write-ask',
+        decision: 'ask',
+        cwd_outside: true,
+        file_access_operation: 'readwrite',
+      }),
+    );
+  });
+
+  it.each([
+    ['Read', { path: '/tmp/outside.ts' }],
+    ['Grep', { pattern: 'TODO', path: '/tmp' }],
+  ] as const)('does not ask for %s access outside cwd', async (toolName, args) => {
+    const { manager, requestApproval, telemetryTrack } = makePermissionManager(async () => ({
+      decision: 'approved',
+    }));
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: `call_${toolName}_outside_cwd`,
+          toolName,
+          args,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(telemetryTrack).toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'default-tool-approve' }),
+    );
+  });
+
+  it('uses Win32 path semantics for cwd containment', async () => {
+    const kaos = createFakeKaos({ pathClass: () => 'win32' });
+    const args = { path: 'c:\\repo\\src\\a.ts', content: 'x' };
+    const { manager, telemetryTrack } = makePermissionManager(
+      async () => ({ decision: 'approved' }),
+      { cwd: 'C:\\Repo', kaos },
+    );
+
+    await expect(
+      manager.beforeToolCall(
+        hookContext({
+          id: 'call_win_inside_cwd',
+          toolName: 'Write',
+          args,
+          execution: {
+            ...testExecution('Write', args),
+            accesses: ToolAccesses.writeFile('c:\\repo\\src\\a.ts'),
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(telemetryTrack).not.toHaveBeenCalledWith(
+      'permission_policy_decision',
+      expect.objectContaining({ policy_name: 'cwd-outside-file-write-ask' }),
+    );
   });
 });
 
@@ -2149,8 +3557,11 @@ function makePermissionManager(
   options: {
     readonly parent?: PermissionManager | undefined;
     readonly planModeActive?: boolean;
+    readonly planFilePath?: string | null | undefined;
     readonly kaos?: Kaos;
     readonly cwd?: string;
+    readonly agentType?: Agent['type'];
+    readonly hooks?: Agent['hooks'];
   } = {},
 ): {
   manager: PermissionManager;
@@ -2163,20 +3574,21 @@ function makePermissionManager(
   const record = vi.fn();
   const telemetryTrack = vi.fn();
   const agent = {
-    type: 'main',
+    type: options.agentType ?? 'main',
     config: { cwd: options.cwd ?? '/workspace' },
     runtime: { kaos: options.kaos ?? createFakeKaos() },
     emitStatusUpdated: vi.fn(),
     records: { logRecord: record },
     replayBuilder: { push: vi.fn() },
     rpc: { requestApproval },
+    hooks: options.hooks,
     telemetry: { track: telemetryTrack },
     planMode: {
       get isActive() {
         return options.planModeActive ?? false;
       },
       get planFilePath() {
-        return null;
+        return options.planFilePath ?? null;
       },
       data: vi.fn(async () => null),
       exit: vi.fn(),
@@ -2198,6 +3610,7 @@ function makePlanPermissionManager(input: {
   record: ReturnType<typeof vi.fn>;
   requestApproval: ReturnType<typeof vi.fn>;
   exit: ReturnType<typeof vi.fn>;
+  telemetryTrack: ReturnType<typeof vi.fn>;
 } {
   const requestApproval = vi.fn(async () => {
     if (input.approvalError !== undefined) throw input.approvalError;
@@ -2205,6 +3618,7 @@ function makePlanPermissionManager(input: {
   });
   const record = vi.fn();
   const exit = vi.fn();
+  const telemetryTrack = vi.fn();
   const path = input.path ?? '/tmp/plan.md';
   const agent = {
     type: 'main',
@@ -2215,7 +3629,7 @@ function makePlanPermissionManager(input: {
     replayBuilder: { push: vi.fn() },
     rpc: { requestApproval },
     log: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
-    telemetry: { track: vi.fn() },
+    telemetry: { track: telemetryTrack },
     planMode: {
       get isActive() {
         return true;
@@ -2236,7 +3650,7 @@ function makePlanPermissionManager(input: {
   const manager = new PermissionManager(agent);
   Object.assign(agent, { permission: manager });
   manager.mode = input.mode;
-  return { manager, record, requestApproval, exit };
+  return { manager, record, requestApproval, exit, telemetryTrack };
 }
 
 function hookContext(input: {
