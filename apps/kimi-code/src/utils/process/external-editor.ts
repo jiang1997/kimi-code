@@ -24,12 +24,33 @@ export function resolveEditorCommand(configured?: string | null): string | undef
 }
 
 /**
- * Launch `command` (tokenised via a shell) against a temp file seeded
- * with `initialText`. Returns the edited contents on success, or
- * `undefined` if the editor exited non-zero / the file disappeared.
+ * Quote a shell argument for the current platform.
+ * - POSIX: single-quote, escaping embedded single-quotes.
+ * - Windows (cmd.exe): double-quote, escaping embedded double-quotes.
+ */
+function quotePosixArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function quoteCmdArg(value: string): string {
+  return `"${value.replaceAll('"', '\\"')}"`;
+}
+
+function quoteShellArg(value: string): string {
+  return process.platform === 'win32'
+    ? quoteCmdArg(value)
+    : quotePosixArg(value);
+}
+
+/**
+ * Launch `command` against a temp file seeded with `initialText`.
+ * Returns the edited contents on success, or `undefined` if the editor
+ * exited non-zero / the file disappeared.
  *
- * The command is passed to `/bin/sh -c "<cmd> <tmpfile>"` so users can
- * supply argv-style strings like `"code --wait"` or `"nvim +set ft=markdown"`.
+ * The user-supplied command is passed verbatim to the system shell
+ * (`shell: true`), so any shell quoting the user wrote is preserved.
+ * Only the appended temp-file path is quoted by us so that paths
+ * containing spaces or special characters survive intact.
  */
 export async function editInExternalEditor(
   initialText: string,
@@ -39,10 +60,13 @@ export async function editInExternalEditor(
   const file = join(dir, 'prompt.md');
   await writeFile(file, initialText, 'utf-8');
   try {
+    const shellCmd = `${command} ${quoteShellArg(file)}`;
     const code = await new Promise<number>((resolve, reject) => {
-      const shellCmd = `${command} ${shellQuote(file)}`;
-      const child = spawn('/bin/sh', ['-c', shellCmd], { stdio: 'inherit' });
-      child.on('exit', (c) =>{  resolve(c ?? 0); });
+      const child = spawn(shellCmd, {
+        stdio: 'inherit',
+        shell: true,
+      });
+      child.on('exit', (c) => { resolve(c ?? 0); });
       child.on('error', reject);
     });
     if (code !== 0) return undefined;
@@ -52,9 +76,4 @@ export async function editInExternalEditor(
       // best-effort cleanup
     });
   }
-}
-
-function shellQuote(path: string): string {
-  // Single-quote and escape any embedded single quotes.
-  return `'${path.replaceAll('\'', "'\\''")}'`;
 }
